@@ -1,3 +1,5 @@
+import uuid
+
 from mlflow.store.tracking.abstract_store import AbstractStore
 from mlflow.protos.databricks_pb2 import INVALID_PARAMETER_VALUE, RESOURCE_ALREADY_EXISTS, \
     INVALID_STATE, RESOURCE_DOES_NOT_EXIST, INTERNAL_ERROR
@@ -5,16 +7,11 @@ from mlflow.entities import (
     Experiment, RunTag, Metric, Param, RunData, RunInfo,
     SourceType, RunStatus, Run, ViewType, ExperimentTag, Columns, LifecycleStage)
 from mlflow.exceptions import MlflowException
-import uuid
 from mlflow.utils.uri import append_to_uri_path
 from elasticsearch_dsl import Index, Search, Q, connections
+
 from models import ElasticExperiment, ElasticRun, ElasticMetric, \
     ElasticParam, ElasticTag, ElasticLatestMetric
-
-user = "a.vivien"
-password = "Akuseru2509"
-
-url = user + ":" + password + "@10.236.61.26:80"
 
 
 class ElasticsearchStore(AbstractStore):
@@ -22,7 +19,10 @@ class ElasticsearchStore(AbstractStore):
     ARTIFACTS_FOLDER_NAME = "artifacts"
     DEFAULT_EXPERIMENT_ID = "0"
 
-    def __init__(self):
+    def __init__(self, user, password):
+
+        url = user + ":" + password + "@10.236.61.26:80"
+
         connections.create_connection(hosts=[url])
 
     def create_experiment(self, name, artifact_location=None):
@@ -35,14 +35,13 @@ class ElasticsearchStore(AbstractStore):
 
     def get_experiment(self, experiment_id):
         experiment = ElasticExperiment.get(id=experiment_id)
-        return experiment
+        return experiment.to_mlflow_entity()
 
     def create_run(self, experiment_id, user_id, start_time, tags):
         run_id = uuid.uuid4().hex
-        # experiment = self.get_experiment(experiment_id)
-        # artifact_location = append_to_uri_path(experiment.artifact_location, run_id,
-        #                                       ElasticsearchStore.ARTIFACTS_FOLDER_NAME)
-        artifact_location = "artifact_path"
+        experiment = self.get_experiment(experiment_id)
+        artifact_location = append_to_uri_path(experiment.artifact_location, run_id,
+                                               ElasticsearchStore.ARTIFACTS_FOLDER_NAME)
 
         tags_dict = {}
         for tag in tags:
