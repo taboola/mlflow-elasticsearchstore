@@ -2,7 +2,7 @@ from mlflow.entities import (
     Experiment, RunTag, Metric, Param, RunData, RunInfo,
     SourceType, RunStatus, Run, ViewType, ExperimentTag)
 from mlflow.entities.lifecycle_stage import LifecycleStage
-from elasticsearch_dsl import Document, Text, Keyword, InnerDoc, Nested, Float, Integer
+from elasticsearch_dsl import Document, InnerDoc, Nested, Text, Keyword, Float, Integer, Date
 
 
 class ElasticExperimentTag(InnerDoc):
@@ -15,11 +15,9 @@ class ElasticExperimentTag(InnerDoc):
 
 
 class ElasticExperiment(Document):
-
-    experiment_id = Keyword()
     name = Keyword()
     artifact_location = Text()
-    lifecycle_stage = Text()
+    lifecycle_stage = Keyword()
     tags = Nested(ElasticExperimentTag)
 
     class Index:
@@ -41,7 +39,7 @@ class ElasticExperiment(Document):
 class ElasticMetric(InnerDoc):
     key = Keyword()
     value = Float()
-    timestamp = Text()
+    timestamp = Date()
     step = Integer()
 
     def to_mlflow_entity(self):
@@ -55,7 +53,7 @@ class ElasticMetric(InnerDoc):
 class ElasticLatestMetric(InnerDoc):
     key = Keyword()
     value = Float()
-    timestamp = Text()
+    timestamp = Date()
     step = Integer()
 
 
@@ -80,18 +78,17 @@ class ElasticTag(InnerDoc):
 
 
 class ElasticRun(Document):
-
     name = Keyword()
     source_type = Keyword()
     source_name = Keyword()
     experiment_id = Keyword()
     user_id = Keyword()
     status = Keyword()
-    start_time = Text()
-    end_time = Text()
+    start_time = Date()
+    end_time = Date()
     source_version = Keyword()
-    lifecycle_stage = Text()
-    artifact_uri = Keyword()
+    lifecycle_stage = Keyword()
+    artifact_uri = Text()
     metrics = Nested(ElasticMetric)
     latest_metrics = Nested(ElasticLatestMetric)
     params = Nested(ElasticParam)

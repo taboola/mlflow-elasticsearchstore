@@ -1,2 +1,2 @@
 mlflow
-elasticsearch_dsl=6.4.0
+elasticsearch_dsl==6.4.0

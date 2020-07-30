@@ -1,4 +1,5 @@
 import uuid
+from typing import List
 
 from mlflow.store.tracking.abstract_store import AbstractStore
 from mlflow.protos.databricks_pb2 import INVALID_PARAMETER_VALUE, RESOURCE_ALREADY_EXISTS, \
@@ -19,13 +20,13 @@ class ElasticsearchStore(AbstractStore):
     ARTIFACTS_FOLDER_NAME = "artifacts"
     DEFAULT_EXPERIMENT_ID = "0"
 
-    def __init__(self, user, password):
+    def __init__(self, user: str, password: str, host: str, port: str) -> None:
 
-        url = user + ":" + password + "@10.236.61.26:80"
+        url = f"{user}:{password}@{host}:{port}"
 
         connections.create_connection(hosts=[url])
 
-    def create_experiment(self, name, artifact_location=None):
+    def create_experiment(self, name: str, artifact_location: str = None) -> str:
         if name is None or name == '':
             raise MlflowException('Invalid experiment name', INVALID_PARAMETER_VALUE)
         experiment = ElasticExperiment(name=name, lifecycle_stage=LifecycleStage.ACTIVE,
@@ -33,11 +34,12 @@ class ElasticsearchStore(AbstractStore):
         experiment.save()
         return str(experiment.meta.id)
 
-    def get_experiment(self, experiment_id):
+    def get_experiment(self, experiment_id: str) -> Experiment:
         experiment = ElasticExperiment.get(id=experiment_id)
         return experiment.to_mlflow_entity()
 
-    def create_run(self, experiment_id, user_id, start_time, tags):
+    def create_run(self, experiment_id: str, user_id: str,
+                   start_time: int, tags: List[RunTag]) -> Run:
         run_id = uuid.uuid4().hex
         experiment = self.get_experiment(experiment_id)
         artifact_location = append_to_uri_path(experiment.artifact_location, run_id,
@@ -56,15 +58,15 @@ class ElasticsearchStore(AbstractStore):
         run.save()
         return run.to_mlflow_entity()
 
-    def get_run(self, run_id):
+    def get_run(self, run_id: str) -> Run:
         run = self._get_run(run_id=run_id)
         return run.to_mlflow_entity()
 
-    def _get_run(self, run_id):
+    def _get_run(self, run_id: str) -> ElasticRun:
         run = ElasticRun.get(id=run_id)
         return run
 
-    def log_metric(self, run_id, metric):
+    def log_metric(self, run_id: str, metric: Metric) -> None:
         run = self._get_run(run_id=run_id)
         new_metric = ElasticMetric(key=metric.key,
                                    value=metric.value,
@@ -73,21 +75,21 @@ class ElasticsearchStore(AbstractStore):
         run.metrics.append(new_metric)
         run.save()
 
-    def log_param(self, run_id, param):
+    def log_param(self, run_id: str, param: Param) -> None:
         run = self._get_run(run_id=run_id)
         new_param = ElasticParam(key=param.key,
                                  value=param.value)
         run.params.append(new_param)
         run.save()
 
-    def set_tag(self, run_id, tag):
+    def set_tag(self, run_id: str, tag: RunTag) -> None:
         run = self._get_run(run_id=run_id)
         new_tag = ElasticTag(key=tag.key,
                              value=tag.value)
         run.tags.append(new_tag)
         run.save()
 
-    def search_runs(self, experiment_ids):
+    def search_runs(self, experiment_ids: List[str]) -> List[Run]:
         response = Search(index="mlflow-runs").filter("match",
                                                       experiment_id=experiment_ids[0]).execute()
         runs = []
