@@ -27,4 +27,4 @@ jobs:
         pylama
     - name: Typer checker
         run: |
-          mypy --ignore-missing-imports -p mlflow_elasticsearchstore
+          mypy --ignore-missing-imports --config-file setup.cfg
