@@ -26,5 +26,5 @@ jobs:
       run: |
         pylama
     - name: Typer checker
-        run: |
-          mypy --ignore-missing-imports --config-file setup.cfg
+      run: |
+        mypy --ignore-missing-imports --config-file setup.cfg
