@@ -25,3 +25,6 @@ jobs:
     - name: Linter
       run: |
         pylama
+    - name: Typer checker
+        run: |
+          mypy --ignore-missing-imports -p mlflow_elasticsearchstore
