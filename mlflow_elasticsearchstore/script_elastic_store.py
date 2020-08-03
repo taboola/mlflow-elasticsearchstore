@@ -4,8 +4,8 @@ import fire
 
 from mlflow.entities import Metric, Param, RunTag
 
-from elasticsearch_store import ElasticsearchStore
-from models import ElasticExperiment, ElasticRun, ElasticMetric, \
+from mlflow_elasticsearchstore.elasticsearch_store import ElasticsearchStore
+from mlflow_elasticsearchstore.models import ElasticExperiment, ElasticRun, ElasticMetric, \
     ElasticParam, ElasticTag, ElasticLatestMetric
 
 metric = Metric("metric2", 9, int(datetime.datetime.now().timestamp() * 1000), 0)
@@ -13,8 +13,8 @@ param = Param("param2", "val1")
 tag = RunTag("tag2", "val1")
 
 
-def main(user, password, host, port):
-    store = ElasticsearchStore(user, password, str(host), str(port))
+def main(user: str, password: str, host: str, port: str) -> None:
+    store = ElasticsearchStore(user, password, host, port)
     exp_id = store.create_experiment("a.vivien-exp2", "artifact_path")
     time.sleep(1)
     run = store.create_run(exp_id, "1", int(datetime.datetime.now().timestamp() * 1000), [])
