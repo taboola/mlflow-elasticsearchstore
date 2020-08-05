@@ -1,3 +1,4 @@
+import datetime
 from elasticsearch_dsl import Document, InnerDoc, Nested, Text, Keyword, Float, Integer, Date
 
 from mlflow.entities import (Experiment, RunTag, Metric, Param,
@@ -38,7 +39,7 @@ class ElasticExperiment(Document):
 class ElasticMetric(InnerDoc):
     key = Keyword()
     value = Float()
-    timestamp = Date()
+    timestamp = Integer()
     step = Integer()
 
     def to_mlflow_entity(self) -> Metric:
@@ -52,7 +53,7 @@ class ElasticMetric(InnerDoc):
 class ElasticLatestMetric(InnerDoc):
     key = Keyword()
     value = Float()
-    timestamp = Date()
+    timestamp = Integer()
     step = Integer()
 
 
@@ -83,8 +84,8 @@ class ElasticRun(Document):
     experiment_id = Keyword()
     user_id = Keyword()
     status = Keyword()
-    start_time = Date()
-    end_time = Date()
+    start_time = Integer()
+    end_time = Integer()
     source_version = Keyword()
     lifecycle_stage = Keyword()
     artifact_uri = Text()
