@@ -1,19 +1,19 @@
 import uuid
 from typing import List, Tuple, Any
-from elasticsearch_dsl import Search, connections
+from elasticsearch_dsl import Search, connections, Q
 import time
 from six.moves import urllib
 
 from mlflow.store.tracking.abstract_store import AbstractStore
-from mlflow.protos.databricks_pb2 import INVALID_PARAMETER_VALUE
+from mlflow.protos.databricks_pb2 import INVALID_PARAMETER_VALUE, INVALID_STATE
 from mlflow.entities import (Experiment, RunTag, Metric, Param, RunInfo, RunData,
-                             RunStatus, Run, LifecycleStage, ViewType)
+                             RunStatus, Run, ExperimentTag, LifecycleStage, ViewType)
 from mlflow.exceptions import MlflowException
 from mlflow.utils.uri import append_to_uri_path
 from mlflow.utils.search_utils import SearchUtils
 
 from mlflow_elasticsearchstore.models import (ElasticExperiment, ElasticRun, ElasticMetric,
-                                              ElasticParam, ElasticTag)
+                                              ElasticParam, ElasticTag, ElasticExperimentTag)
 
 
 class ElasticsearchStore(AbstractStore):
@@ -24,6 +24,8 @@ class ElasticsearchStore(AbstractStore):
     def __init__(self, store_uri: str = None, artifact_uri: str = None) -> None:
         self.is_plugin = True
         connections.create_connection(hosts=[urllib.parse.urlparse(store_uri).netloc])
+        ElasticExperiment.init()
+        ElasticRun.init()
         super(ElasticsearchStore, self).__init__()
 
     def _hit_to_mlflow_experiment(self, hit: Any) -> Experiment:
@@ -71,9 +73,24 @@ class ElasticsearchStore(AbstractStore):
         experiment.save()
         return str(experiment.meta.id)
 
-    def get_experiment(self, experiment_id: str) -> Experiment:
+    def _get_experiment(self, experiment_id: str) -> ElasticExperiment:
         experiment = ElasticExperiment.get(id=experiment_id)
-        return experiment.to_mlflow_entity()
+        return experiment
+
+    def get_experiment(self, experiment_id: str) -> Experiment:
+        return self._get_experiment(experiment_id).to_mlflow_entity()
+
+    def delete_experiment(self, experiment_id: str) -> None:
+        self._get_experiment(experiment_id).update(lifecycle_stage=LifecycleStage.DELETED)
+
+    def restore_experiment(self, experiment_id: str) -> None:
+        self._get_experiment(experiment_id).update(lifecycle_stage=LifecycleStage.ACTIVE)
+
+    def rename_experiment(self, experiment_id: str, new_name: str) -> None:
+        experiment = self._get_experiment(experiment_id)
+        if experiment.lifecycle_stage != LifecycleStage.ACTIVE:
+            raise MlflowException('Cannot rename a non-active experiment.', INVALID_STATE)
+        experiment.update(name=new_name)
 
     def create_run(self, experiment_id: str, user_id: str,
                    start_time: int, tags: List[RunTag]) -> Run:
@@ -95,6 +112,24 @@ class ElasticsearchStore(AbstractStore):
         run.save()
         return run.to_mlflow_entity()
 
+    def _check_run_is_active(self, run: ElasticRun) -> None:
+        if run.lifecycle_stage != LifecycleStage.ACTIVE:
+            raise MlflowException("The run {} must be in the 'active' state. Current state is {}."
+                                  .format(run.meta.id, run.lifecycle_stage),
+                                  INVALID_PARAMETER_VALUE)
+
+    def _check_run_is_deleted(self, run: ElasticRun) -> None:
+        if run.lifecycle_stage != LifecycleStage.DELETED:
+            raise MlflowException("The run {} must be in the 'deleted' state. Current state is {}."
+                                  .format(run.meta.id, run.lifecycle_stage),
+                                  INVALID_PARAMETER_VALUE)
+
+    def update_run_info(self, run_id: str, run_status: RunStatus, end_time: int) -> RunInfo:
+        run = self._get_run(run_id)
+        self._check_run_is_active(run)
+        run.update(status=RunStatus.to_string(run_status), end_time=end_time)
+        return run.to_mlflow_entity()._info
+
     def get_run(self, run_id: str) -> Run:
         run = self._get_run(run_id=run_id)
         return run.to_mlflow_entity()
@@ -102,6 +137,16 @@ class ElasticsearchStore(AbstractStore):
     def _get_run(self, run_id: str) -> ElasticRun:
         run = ElasticRun.get(id=run_id)
         return run
+
+    def delete_run(self, run_id: str) -> None:
+        run = self._get_run(run_id)
+        self._check_run_is_active(run)
+        run.update(lifecycle_stage=LifecycleStage.DELETED)
+
+    def restore_run(self, run_id: str) -> None:
+        run = self._get_run(run_id)
+        self._check_run_is_deleted(run)
+        run.update(lifecycle_stage=LifecycleStage.ACTIVE)
 
     def log_metric(self, run_id: str, metric: Metric) -> None:
         run = self._get_run(run_id=run_id)
@@ -119,12 +164,25 @@ class ElasticsearchStore(AbstractStore):
         run.params.append(new_param)
         run.save()
 
+    def set_experiment_tag(self, experiment_id: str, tag: ExperimentTag) -> None:
+        experiment = self._get_experiment(experiment_id)
+        new_tag = ElasticExperimentTag(key=tag.key, value=tag.value)
+        experiment.tags.append(new_tag)
+        experiment.save()
+
     def set_tag(self, run_id: str, tag: RunTag) -> None:
         run = self._get_run(run_id=run_id)
         new_tag = ElasticTag(key=tag.key,
                              value=tag.value)
         run.tags.append(new_tag)
         run.save()
+
+    def get_metric_history(self, run_id: str, metric_key: str) -> List[Metric]:
+        response = Search(index="mlflow-runs").filter("ids", values=[run_id]) \
+            .filter('nested', inner_hits={"size": 100}, path="metrics",
+                    query=Q('term', metrics__key=metric_key)).source("false").execute()
+        return [self._hit_to_mlflow_metric(m._source) for m in
+                response["hits"]["hits"][0].inner_hits.metrics.hits.hits]
 
     def _search_runs(self, experiment_ids: List[str], filter_string: str = None,
                      run_view_type: str = None, max_results: int = None,
