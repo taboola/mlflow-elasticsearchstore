@@ -7,8 +7,8 @@ from six.moves import urllib
 
 from mlflow.store.tracking.abstract_store import AbstractStore
 from mlflow.protos.databricks_pb2 import INVALID_PARAMETER_VALUE, INVALID_STATE
-from mlflow.entities import (Experiment, RunTag, Metric, Param, RunInfo, RunData,
-                             RunStatus, Run, ExperimentTag, LifecycleStage, ViewType)
+from mlflow.entities import (Experiment, RunTag, Metric, Param, Run, RunInfo, RunData,
+                             RunStatus, ExperimentTag, LifecycleStage, ViewType, Columns)
 from mlflow.exceptions import MlflowException
 from mlflow.utils.uri import append_to_uri_path
 from mlflow.utils.search_utils import SearchUtils
@@ -218,8 +218,20 @@ class ElasticsearchStore(AbstractStore):
             .filter('nested', inner_hits={"size": 100}, path="metrics",
                     query=Q('term', metrics__key=metric_key)).source("false").execute()
         return [self._hit_to_mlflow_metric(m["_source"]) for m in
-
                 response["hits"]["hits"][0].inner_hits.metrics.hits.hits]
+
+    def list_all_columns(self, experiment_id: str, run_view_type: str) -> Columns:
+        stages = LifecycleStage.view_type_to_stages(run_view_type)
+        s = Search(index="mlflow-runs").filter("match", experiment_id=experiment_id)\
+            .filter("terms", lifecycle_stage=stages)
+        for col in ['latest_metrics', 'params', 'tags']:
+            s.aggs.bucket(col, 'nested', path=col) \
+                .bucket(f'{col}_keys', "terms", field=f'{col}.key')
+        response = s.execute()
+        metrics = [m.key for m in response.aggregations.latest_metrics.latest_metrics_keys.buckets]
+        params = [p.key for p in response.aggregations.params.params_keys.buckets]
+        tags = [t.key for t in response.aggregations.tags.tags_keys.buckets]
+        return Columns(metrics=metrics, params=params, tags=tags)
 
     def _search_runs(self, experiment_ids: List[str], filter_string: str = None,
                      run_view_type: str = None, max_results: int = None,
