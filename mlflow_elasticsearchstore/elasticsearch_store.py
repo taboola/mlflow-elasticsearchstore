@@ -1,4 +1,5 @@
 import uuid
+import math
 from typing import List, Tuple, Any
 from elasticsearch_dsl import Search, connections, Q
 import time
@@ -13,7 +14,8 @@ from mlflow.utils.uri import append_to_uri_path
 from mlflow.utils.search_utils import SearchUtils
 
 from mlflow_elasticsearchstore.models import (ElasticExperiment, ElasticRun, ElasticMetric,
-                                              ElasticParam, ElasticTag, ElasticExperimentTag)
+                                              ElasticParam, ElasticTag,
+                                              ElasticLatestMetric, ElasticExperimentTag)
 
 
 class ElasticsearchStore(AbstractStore):
@@ -81,10 +83,16 @@ class ElasticsearchStore(AbstractStore):
         return self._get_experiment(experiment_id).to_mlflow_entity()
 
     def delete_experiment(self, experiment_id: str) -> None:
-        self._get_experiment(experiment_id).update(lifecycle_stage=LifecycleStage.DELETED)
+        experiment = self._get_experiment(experiment_id)
+        if experiment.lifecycle_stage != LifecycleStage.ACTIVE:
+            raise MlflowException('Cannot delete an already deleted experiment.', INVALID_STATE)
+        experiment.update(lifecycle_stage=LifecycleStage.DELETED)
 
     def restore_experiment(self, experiment_id: str) -> None:
-        self._get_experiment(experiment_id).update(lifecycle_stage=LifecycleStage.ACTIVE)
+        experiment = self._get_experiment(experiment_id)
+        if experiment.lifecycle_stage != LifecycleStage.DELETED:
+            raise MlflowException('Cannot restore an active experiment.', INVALID_STATE)
+        experiment.update(lifecycle_stage=LifecycleStage.ACTIVE)
 
     def rename_experiment(self, experiment_id: str, new_name: str) -> None:
         experiment = self._get_experiment(experiment_id)
@@ -148,12 +156,40 @@ class ElasticsearchStore(AbstractStore):
         self._check_run_is_deleted(run)
         run.update(lifecycle_stage=LifecycleStage.ACTIVE)
 
+    @staticmethod
+    def _update_latest_metric_if_necessary(new_metric: ElasticMetric, run: ElasticRun) -> None:
+        def _compare_metrics(metric_a: ElasticLatestMetric, metric_b: ElasticLatestMetric) -> bool:
+            return (metric_a.step, metric_a.timestamp, metric_a.value) > \
+                   (metric_b.step, metric_b.timestamp, metric_b.value)
+        new_latest_metric = ElasticLatestMetric(key=new_metric.key,
+                                                value=new_metric.value,
+                                                timestamp=new_metric.timestamp,
+                                                step=new_metric.step,
+                                                is_nan=new_metric.is_nan)
+        latest_metric_exist = False
+        for i, latest_metric in enumerate(run.latest_metrics):
+            if latest_metric.key == new_metric.key:
+                latest_metric_exist = True
+                if _compare_metrics(new_latest_metric, latest_metric):
+                    run.latest_metrics[i] = new_latest_metric
+        if not (latest_metric_exist):
+            run.latest_metrics.append(new_latest_metric)
+
     def log_metric(self, run_id: str, metric: Metric) -> None:
+        is_nan = math.isnan(metric.value)
+        if is_nan:
+            value = 0.
+        elif math.isinf(metric.value):
+            value = 1.7976931348623157e308 if metric.value > 0 else -1.7976931348623157e308
+        else:
+            value = metric.value
         run = self._get_run(run_id=run_id)
         new_metric = ElasticMetric(key=metric.key,
-                                   value=metric.value,
+                                   value=value,
                                    timestamp=metric.timestamp,
-                                   step=metric.step)
+                                   step=metric.step,
+                                   is_nan=is_nan)
+        self._update_latest_metric_if_necessary(new_metric, run)
         run.metrics.append(new_metric)
         run.save()
 
@@ -181,7 +217,8 @@ class ElasticsearchStore(AbstractStore):
         response = Search(index="mlflow-runs").filter("ids", values=[run_id]) \
             .filter('nested', inner_hits={"size": 100}, path="metrics",
                     query=Q('term', metrics__key=metric_key)).source("false").execute()
-        return [self._hit_to_mlflow_metric(m._source) for m in
+        return [self._hit_to_mlflow_metric(m["_source"]) for m in
+
                 response["hits"]["hits"][0].inner_hits.metrics.hits.hits]
 
     def _search_runs(self, experiment_ids: List[str], filter_string: str = None,
