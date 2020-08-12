@@ -1,7 +1,7 @@
 import pytest
 import mock
 from types import SimpleNamespace
-from elasticsearch_dsl import Search
+from elasticsearch_dsl import Search, Q
 
 from mlflow.entities import (RunTag, Metric, Param, RunStatus,
                              LifecycleStage, ViewType, ExperimentTag)
@@ -240,52 +240,6 @@ def test_set_tag(elastic_run_get_mock, create_store):
     run.save.assert_called_once_with()
 
 
-@mock.patch('elasticsearch_dsl.Search.filter')
-@pytest.mark.usefixtures('create_store')
-def test__search_runs(search_filter_mock, create_store):
-    m = SimpleNamespace(**{"key": "metric1", "value": 1, "timestamp": 1, "step": 1})
-    p = SimpleNamespace(**{"key": "param1", "value": "val1"})
-    t = SimpleNamespace(**{"key": "tag1", "value": "val1"})
-    meta = SimpleNamespace(**{"id": "1"})
-    hit = {"meta": meta, "experiment_id": "1", "user_id": "user_id",
-           "status": RunStatus.to_string(RunStatus.RUNNING), "start_time": 1,
-           "lifecycle_stage": LifecycleStage.ACTIVE, "artifact_uri": "artifact_location",
-           "metrics": [m], "params": [p], "tags": [t]}
-    response = [SimpleNamespace(**hit)]
-    search_filter_mock.return_value = Search()
-    search_filter_mock.return_value.execute = mock.MagicMock(return_value=response)
-    real_runs, token = create_store._search_runs(["1"])
-    search_filter_mock.assert_called_once_with("match", experiment_id="1")
-    search_filter_mock.return_value.execute.assert_called_once_with()
-
-    for r in response:
-        metrics = []
-        params = []
-        tags = []
-        for m in r.metrics:
-            metrics.append(ElasticMetric(key=m.key,
-                                         value=m.value,
-                                         timestamp=m.timestamp,
-                                         step=m.step))
-        for p in r.params:
-            params.append(ElasticParam(key=p.key, value=p.value))
-        for t in r.tags:
-            tags.append(ElasticTag(key=t.key, value=t.value))
-        run = ElasticRun(meta={'id': r.meta.id},
-                         experiment_id=r.experiment_id, user_id=r.user_id,
-                         status=r.status,
-                         start_time=r.start_time,
-                         end_time=None,
-                         lifecycle_stage=r.lifecycle_stage, artifact_uri=r.artifact_uri,
-                         metrics=metrics, params=params, tags=tags
-                         )
-    runs = [run.to_mlflow_entity()]
-    assert real_runs[0]._info == runs[0]._info
-    assert real_runs[0]._data._metrics == runs[0]._data._metrics
-    assert real_runs[0]._data._params == runs[0]._data._params
-    assert real_runs[0]._data._tags == runs[0]._data.tags
-
-
 @pytest.mark.parametrize("test_elastic_metric,test_elastic_latest_metrics",
                          [(ElasticMetric(key="metric1", value=2, timestamp=1, step=2, is_nan=False),
                            [ElasticLatestMetric(key="metric1", value=2, timestamp=1,
@@ -301,3 +255,63 @@ def test__update_latest_metric_if_necessary(test_elastic_metric, test_elastic_la
                                             create_store):
     create_store._update_latest_metric_if_necessary(test_elastic_metric, run)
     assert run.latest_metrics == test_elastic_latest_metrics
+
+
+@pytest.mark.parametrize("test_parsed_filter,test_query,test_type",
+                         [({'type': 'parameter', 'key': 'param0',
+                            'comparator': 'LIKE', 'value': '%va%'},
+                           Q("term", params__key="param0") &
+                           Q('bool', must=[Q("wildcard", params__value="*va*")]),
+                           "params"),
+                          ({'type': 'parameter', 'key': 'param0',
+                            'comparator': 'ILIKE', 'value': '%va%'},
+                           Q("term", params__key="param0") &
+                           Q('bool', must=[Q("wildcard", params__value="*va*")]),
+                           "params"),
+                          ({'type': 'parameter', 'key': 'param0',
+                            'comparator': '=', 'value': 'va'},
+                           Q("term", params__key="param0") &
+                           Q('bool', must=[Q("term", params__value="va")]),
+                           "params"),
+                          ({'type': 'metric', 'key': 'metric0', 'comparator': '>', 'value': '1'},
+                           Q("term", latest_metrics__key="metric0") &
+                           Q('bool', must=[Q("range", latest_metrics__value={'gt': "1"})]),
+                           "latest_metrics"),
+                          ({'type': 'metric', 'key': 'metric0', 'comparator': '>=', 'value': '1'},
+                           Q("term", latest_metrics__key="metric0") &
+                           Q('bool', must=[Q("range", latest_metrics__value={'gte': "1"})]),
+                           "latest_metrics"),
+                          ({'type': 'metric', 'key': 'metric0', 'comparator': '<', 'value': '1'},
+                           Q("term", latest_metrics__key="metric0") &
+                           Q('bool', must=[Q("range", latest_metrics__value={'lt': "1"})]),
+                           "latest_metrics"),
+                          ({'type': 'metric', 'key': 'metric0', 'comparator': '<=', 'value': '1'},
+                           Q("term", latest_metrics__key="metric0") &
+                           Q('bool', must=[Q("range", latest_metrics__value={'lte': "1"})]),
+                           "latest_metrics"),
+                          ({'type': 'tag', 'key': 'tag0', 'comparator': '!=', 'value': 'val2'},
+                           Q("term", tags__key="tag0") &
+                           Q('bool', must_not=[Q("term", tags__value="val2")]),
+                           "tags")])
+@pytest.mark.usefixtures('create_store')
+def test___build_elasticsearch_query(test_parsed_filter, test_query,
+                                     test_type, create_store):
+    actual_query = create_store._build_elasticsearch_query(
+        parsed_filters=[test_parsed_filter], s=Search())
+    expected_query = Search().query('nested', path=test_type, query=test_query)
+    assert actual_query == expected_query
+
+
+@pytest.mark.usefixtures('create_store')
+def test___get_orderby_clauses(create_store):
+    order_by_list = ['metrics.`metric0` ASC', 'params.`param0` DESC']
+    actual_query = create_store._get_orderby_clauses(order_by_list=order_by_list, s=Search())
+    sort_clauses = [{'latest_metrics.value': {'order': "asc",
+                                              "nested": {"path": "latest_metrics",
+                                                         "filter": {"term": {'latest_metrics.key':
+                                                                             "metric0"}}}}},
+                    {'params.value': {'order': "desc",
+                                      "nested": {"path": "params",
+                                                 "filter": {"term": {'params.key': "param0"}}}}}]
+    expected_query = Search().sort(*sort_clauses)
+    assert actual_query == expected_query
