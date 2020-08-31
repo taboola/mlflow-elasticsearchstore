@@ -10,7 +10,11 @@ from mlflow.store.tracking.abstract_store import AbstractStore
 from mlflow.store.tracking import SEARCH_MAX_RESULTS_THRESHOLD, SEARCH_MAX_RESULTS_DEFAULT
 from mlflow.protos.databricks_pb2 import INVALID_PARAMETER_VALUE, INVALID_STATE
 from mlflow.entities import (Experiment, RunTag, Metric, Param, Run, RunInfo, RunData,
-                             RunStatus, ExperimentTag, LifecycleStage, ViewType, Columns)
+                             RunStatus, ExperimentTag, LifecycleStage, ViewType)
+try:
+    from mlflow.entities import Columns
+except ImportError:
+    pass
 from mlflow.exceptions import MlflowException
 from mlflow.utils.uri import append_to_uri_path
 from mlflow.utils.search_utils import SearchUtils
@@ -247,7 +251,7 @@ class ElasticsearchStore(AbstractStore):
                  response["hits"]["hits"][0].inner_hits.metrics.hits.hits]
                 if (len(response["hits"]["hits"]) != 0) else [])
 
-    def list_all_columns(self, experiment_id: str, run_view_type: str) -> Columns:
+    def list_all_columns(self, experiment_id: str, run_view_type: str) -> 'Columns':
         stages = LifecycleStage.view_type_to_stages(run_view_type)
         s = Search(index="mlflow-runs").filter("match", experiment_id=experiment_id) \
             .filter("terms", lifecycle_stage=stages)
