@@ -94,7 +94,7 @@ class ElasticsearchStore(AbstractStore):
     def _hit_to_mlflow_param(self, p_key: Any, p_val: Any) -> Param:
         return Param(key=p_key, value=p_val)
 
-    def _hit_to_mlflow_tag(self, t_key: Any, t_val) -> RunTag:
+    def _hit_to_mlflow_tag(self, t_key: Any, t_val: Any) -> RunTag:
         return RunTag(key=t_key, value=t_val)
 
     def list_experiments(self, view_type: str = ViewType.ACTIVE_ONLY) -> List[Experiment]:
