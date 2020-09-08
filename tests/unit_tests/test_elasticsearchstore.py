@@ -5,7 +5,7 @@ from elasticsearch import Elasticsearch
 from elasticsearch.client import IndicesClient
 from elasticsearch_dsl import Search, Q
 
-from mlflow.entities import (RunTag, Metric, Param, RunStatus,
+from mlflow.entities import (RunTag, Metric, Param, RunStatus, SourceType,
                              LifecycleStage, ViewType, ExperimentTag)
 
 from mlflow_elasticsearchstore.elasticsearch_store import ElasticsearchStore
@@ -33,7 +33,15 @@ elastic_experiment_tag = ElasticExperimentTag(key="tag1", value="val1")
 experiment = ElasticExperiment(meta={'id': "1"}, name="name",
                                lifecycle_stage=LifecycleStage.ACTIVE,
                                artifact_location="artifact_location")
-
+run_response = {'_index': 'mlflow-runs', '_type': '_doc', '_id': '1',
+                '_version': 1, '_seq_no': 0, '_primary_term': 1, 'found': True,
+                '_source': {'experiment_id': 'experiment_id', 'user_id': 'user_id',
+                            'status': 'RUNNING', 'start_time': 1597324762662,
+                            'lifecycle_stage': 'active', 'artifact_uri': 'artifact_location',
+                            'latest_metrics': {'metric1': {'value': 1, 'timestamp': 1,
+                                                           'step': 1, 'is_nan': False}},
+                            'params': {'param1': 'Val1'},
+                            'tags': {'tag1': 'val1'}}}
 run = ElasticRun(meta={'id': "1"},
                  experiment_id="experiment_id", user_id="user_id",
                  status=RunStatus.to_string(RunStatus.RUNNING),
@@ -144,20 +152,35 @@ def test_rename_experiment(elastic_update_mock, elastic_get_mock, create_store):
         refresh=True)
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
-@mock.patch('mlflow_elasticsearchstore.models.ElasticRun.save')
-@mock.patch('mlflow_elasticsearchstore.models.ElasticExperiment.get')
+@mock.patch('elasticsearch.Elasticsearch.create')
+@mock.patch('elasticsearch.Elasticsearch.get')
 @mock.patch('uuid.uuid4')
 @pytest.mark.usefixtures('create_store')
-def test_create_run(uuid_mock, elastic_experiment_get_mock,
-                    elastic_run_save_mock, create_store):
+def test_create_run(uuid_mock, elastic_get_mock,
+                    elastic_create_mock, create_store):
     uuid_mock.return_value = SimpleNamespace(hex='run_id')
-    elastic_experiment_get_mock.return_value = experiment
+    elastic_get_mock.return_value = experiment_response
     real_run = create_store.create_run(
         experiment_id="1", user_id="user_id", start_time=1, tags=[])
     uuid_mock.assert_called_once_with()
-    elastic_experiment_get_mock.assert_called_once_with(id="1")
-    elastic_run_save_mock.assert_called_once_with()
+    elastic_get_mock.assert_called_once_with(index=ExperimentIndex.name, id="1")
+    body = {"experiment_id": "1",
+            "user_id": "user_id",
+            "status": RunStatus.to_string(RunStatus.RUNNING),
+            "start_time": 1,
+            "end_time": None,
+            "lifecycle_stage": LifecycleStage.ACTIVE,
+            "artifact_uri": 'artifact_location/run_id/artifacts',
+            "latest_metrics": {},
+            "params": {},
+            "tags": {},
+            "name": "",
+            "source_type": SourceType.to_string(SourceType.UNKNOWN),
+            "source_name": "",
+            "entry_point_name": "",
+            "source_version": "",
+            }
+    elastic_create_mock.assert_called_once_with(index=RunIndex.name, id="run_id", body=body)
     assert real_run._info.experiment_id == "1"
     assert real_run._info.user_id == "user_id"
     assert real_run._info.start_time == 1
@@ -199,27 +222,17 @@ def test_update_run_info(elastic_run_get_mock, create_store):
         status=RunStatus.to_string(RunStatus.FINISHED), end_time=2)
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
-@mock.patch('mlflow_elasticsearchstore.models.ElasticRun.get')
+@mock.patch('elasticsearch.Elasticsearch.get')
 @pytest.mark.usefixtures('create_store')
-def test__get_run(elastic_run_get_mock, create_store):
-    elastic_run_get_mock.return_value = run
-    real_run = create_store._get_run("1")
-    ElasticRun.get.assert_called_once_with(id="1")
-    assert run == real_run
-
-
-@pytest.mark.skip(reason="no way of currently testing this")
-@mock.patch('mlflow_elasticsearchstore.models.ElasticRun.get')
-@pytest.mark.usefixtures('create_store')
-def test_get_run(elastic_run_get_mock, create_store):
-    elastic_run_get_mock.return_value = run
+def test_get_run(elastic_get_mock, create_store):
+    elastic_get_mock.return_value = run_response
+    expected_run = create_store._hit_to_mlflow_run(run_response)
     real_run = create_store.get_run("1")
-    ElasticRun.get.assert_called_once_with(id="1")
-    assert run.to_mlflow_entity()._info == real_run._info
-    assert run.to_mlflow_entity()._data._metrics == real_run._data._metrics
-    assert run.to_mlflow_entity()._data._params == real_run._data._params
-    assert run.to_mlflow_entity()._data._tags == real_run._data._tags
+    elastic_get_mock.assert_called_once_with(index=RunIndex.name, id="1")
+    assert expected_run._info == real_run._info
+    assert expected_run._data._metrics == real_run._data._metrics
+    assert expected_run._data._params == real_run._data._params
+    assert expected_run._data._tags == real_run._data._tags
 
 
 @pytest.mark.skip(reason="no way of currently testing this")

@@ -144,7 +144,6 @@ def test_rename_experiment(init_store):
     assert renamed_exp.name == "exp2renamed"
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.usefixtures('init_store')
 def test_get_run(init_store):
     expected_run_info = RunInfo(run_uuid="7b2e71956f3d4c08b042624a8d83700d",
@@ -158,11 +157,7 @@ def test_get_run(init_store):
                                 "/artifacts",
                                 run_id="7b2e71956f3d4c08b042624a8d83700d")
 
-    expected_metrics = [Metric(key="metric0", value=15.0, timestamp=1597324762700, step=0),
-                        Metric(key="metric0", value=7.0, timestamp=1597324762742, step=1),
-                        Metric(key="metric0", value=20.0, timestamp=1597324762778, step=2),
-                        Metric(key="metric1", value=20.0, timestamp=1597324762815, step=0),
-                        Metric(key="metric1", value=0.0, timestamp=1597324762847, step=1),
+    expected_metrics = [Metric(key="metric0", value=20.0, timestamp=1597324762778, step=2),
                         Metric(key="metric1", value=7.0, timestamp=1597324762890, step=2)]
 
     expected_params = [Param(key="param0", value="val2"),
@@ -186,7 +181,6 @@ def test_get_run(init_store):
     assert run._data._tags == expected_run_data._tags
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.usefixtures('init_store')
 def test_create_run(init_store):
     run = init_store.create_run("hzb553MBNoOYfhXjsXRa", "2", 10, [RunTag(key="tag1", value="val1")])
