@@ -99,7 +99,8 @@ def test_list_experiments(search_mock, create_store):
         }
     }
     search_mock.assert_called_once_with(index=ExperimentIndex.name, body=body)
-    mock_experiments = [create_store._hit_to_mlflow_experiment(e) for e in response["hits"]["hits"]]
+    mock_experiments = [create_store._dict_to_mlflow_experiment(
+        e, e["_id"]) for e in response["hits"]["hits"]]
     assert real_experiments[0].__dict__ == mock_experiments[0].__dict__
 
 
@@ -109,8 +110,8 @@ def test_get_experiment(elastic_get_mock, create_store):
     elastic_get_mock.return_value = experiment_response
     real_experiment = create_store.get_experiment("1")
     elastic_get_mock.assert_called_once_with(index=ExperimentIndex.name, id="1")
-    assert create_store._hit_to_mlflow_experiment(
-        experiment_response).__dict__ == real_experiment.__dict__
+    assert create_store._dict_to_mlflow_experiment(
+        experiment_response, experiment_response["_id"]).__dict__ == real_experiment.__dict__
 
 
 @mock.patch('elasticsearch.Elasticsearch.get')
@@ -188,15 +189,15 @@ def test_create_run(uuid_mock, elastic_get_mock,
     assert real_run._info.run_id == "run_id"
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
-@mock.patch('mlflow_elasticsearchstore.models.ElasticRun.get')
+@mock.patch('elasticsearch.Elasticsearch.update')
+@mock.patch('elasticsearch.Elasticsearch.get')
 @pytest.mark.usefixtures('create_store')
-def test_delete_run(elastic_run_get_mock, create_store):
-    elastic_run_get_mock.return_value = run
-    run.update = mock.MagicMock()
+def test_delete_run(elastic_get_mock, elastic_update_mock, create_store):
+    elastic_get_mock.return_value = run_response
     create_store.delete_run("1")
-    elastic_run_get_mock.assert_called_once_with(id="1")
-    run.update.assert_called_once_with(lifecycle_stage=LifecycleStage.DELETED)
+    elastic_get_mock.assert_called_once_with(index=RunIndex.name, id="1")
+    elastic_update_mock.assert_called_once_with(
+        index=RunIndex.name, id="1", body={"doc": {"lifecycle_stage": LifecycleStage.DELETED}})
 
 
 @pytest.mark.skip(reason="no way of currently testing this")
@@ -226,7 +227,7 @@ def test_update_run_info(elastic_run_get_mock, create_store):
 @pytest.mark.usefixtures('create_store')
 def test_get_run(elastic_get_mock, create_store):
     elastic_get_mock.return_value = run_response
-    expected_run = create_store._hit_to_mlflow_run(run_response)
+    expected_run = create_store._dict_to_mlflow_run(run_response, run_response["_id"])
     real_run = create_store.get_run("1")
     elastic_get_mock.assert_called_once_with(index=RunIndex.name, id="1")
     assert expected_run._info == real_run._info

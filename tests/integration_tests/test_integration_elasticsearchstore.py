@@ -72,6 +72,7 @@ def test_create_experiment_with_no_name(init_store):
         assert 'Invalid experiment name' in str(excinfo.value)
 
 
+@pytest.mark.usefixtures('init_store')
 def test_create_experiment_with_existing_name(init_store):
     with pytest.raises(MlflowException) as excinfo:
         init_store.create_experiment(name="exp0", artifact_location="artifact_location")
@@ -122,9 +123,8 @@ def test_set_experiment_tag_of_non_active_experiment(init_store):
         assert "must be in the 'active' state" in str(excinfo.value)
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.usefixtures('init_store')
-def test_create_run_in_non_activeexperiment(init_store):
+def test_create_run_in_non_active_experiment(init_store):
     with pytest.raises(MlflowException) as excinfo:
         init_store.create_run("hzb553MBNoOYfhXjsXRa", "1", 10, [])
         assert "must be in the 'active' state" in str(excinfo.value)
@@ -189,7 +189,6 @@ def test_create_run(init_store):
     assert actual_run._data.__dict__ == run._data.__dict__
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.usefixtures('init_store')
 def test_update_run_info(init_store):
     run_info = init_store.update_run_info(
@@ -199,7 +198,6 @@ def test_update_run_info(init_store):
     assert run_info.end_time == actual_run._info.end_time
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.usefixtures('init_store')
 def test_delete_run(init_store):
     init_store.delete_run("d57a45f3763e4827b7c03f03d60dbbe1")
@@ -207,7 +205,6 @@ def test_delete_run(init_store):
     assert run_deleted._info._lifecycle_stage == LifecycleStage.DELETED
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.usefixtures('init_store')
 def test_delete_run_of_deleted_run(init_store):
     with pytest.raises(MlflowException) as excinfo:
@@ -215,7 +212,6 @@ def test_delete_run_of_deleted_run(init_store):
         assert "must be in the 'active' state" in str(excinfo.value)
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.usefixtures('init_store')
 def test_update_run_info_of_deleted_run(init_store):
     with pytest.raises(MlflowException) as excinfo:

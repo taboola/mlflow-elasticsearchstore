@@ -1,7 +1,7 @@
 import uuid
 import math
 import re
-from typing import List, Tuple, Any, Dict
+from typing import List, Tuple, Dict
 from elasticsearch_dsl import Search, connections, Q
 from elasticsearch import Elasticsearch
 from elasticsearch.client import IndicesClient
@@ -60,65 +60,52 @@ class ElasticsearchStore(AbstractStore):
         RunIndex.init(indices=self.indices)
         super(ElasticsearchStore, self).__init__()
 
-    def _hit_to_mlflow_experiment(self, hit: Any) -> Experiment:
-        return Experiment(experiment_id=hit["_id"], name=hit["_source"]["name"],
-                          artifact_location=hit["_source"]["artifact_location"],
-                          lifecycle_stage=hit["_source"]["lifecycle_stage"])
+    def _dict_to_mlflow_experiment(self, exp_dict: Dict, _id: str) -> Experiment:
+        return Experiment(experiment_id=_id, name=exp_dict["_source"]["name"],
+                          artifact_location=exp_dict["_source"]["artifact_location"],
+                          lifecycle_stage=exp_dict["_source"]["lifecycle_stage"])
 
-    def _hit_to_mlflow_run(self, hit: Any) -> Run:
-        return Run(run_info=self._hit_to_mlflow_run_info(hit),
-                   run_data=self._hit_to_mlflow_run_data(hit["_source"]))
+    def _dict_to_mlflow_run(self, run_dict: Dict, _id: str) -> Run:
+        return Run(run_info=self._dict_to_mlflow_run_info(run_dict["_source"], _id),
+                   run_data=self._dict_to_mlflow_run_data(run_dict["_source"]))
 
-    def _hit_to_mlflow_run_info(self, hit: Any) -> RunInfo:
-        return RunInfo(run_uuid=hit["_id"], run_id=hit["_id"],
-                       experiment_id=hit["_source"]["experiment_id"],
-                       user_id=hit["_source"]["user_id"],
-                       status=hit["_source"]["status"],
-                       start_time=hit["_source"]["start_time"],
-                       end_time=hit["_source"]["end_time"] if hasattr(hit, 'end_time') else None,
-                       lifecycle_stage=hit["_source"]["lifecycle_stage"],
-                       artifact_uri=hit["_source"]["artifact_uri"])
+    def _dict_to_mlflow_run_info(self, info_dict: Dict, _id: str) -> RunInfo:
+        return RunInfo(run_uuid=_id, run_id=_id,
+                       experiment_id=info_dict["experiment_id"],
+                       user_id=info_dict["user_id"],
+                       status=info_dict["status"],
+                       start_time=info_dict["start_time"],
+                       end_time=info_dict["end_time"] if "end_time" in info_dict else None,
+                       lifecycle_stage=info_dict["lifecycle_stage"],
+                       artifact_uri=info_dict["artifact_uri"])
 
-    def _hit_to_mlflow_run_data(self, hit: Any) -> RunData:
-        return RunData(metrics=[self._hit_to_mlflow_metric(m_key, m_val) for m_key, m_val in
-                                (hit["latest_metrics"].items() if 'latest_metrics' in hit else [])],
-                       params=[self._hit_to_mlflow_param(p_key, p_val) for p_key, p_val in
-                               (hit["params"].items() if 'params' in hit else [])],
-                       tags=[self._hit_to_mlflow_tag(t_key, t_val) for t_key, t_val in
-                             (hit["tags"].items() if 'tags' in hit else[])])
+    def _dict_to_mlflow_run_data(self, data_dict: Dict) -> RunData:
+        return RunData(metrics=[self._dict_to_mlflow_metric(m_key, m_val) for m_key, m_val in
+                                (data_dict["latest_metrics"].items()
+                                    if 'latest_metrics' in data_dict else [])],
+                       params=[self._dict_to_mlflow_param(p_key, p_val) for p_key, p_val in
+                               (data_dict["params"].items() if 'params' in data_dict else [])],
+                       tags=[self._dict_to_mlflow_tag(t_key, t_val) for t_key, t_val in
+                             (data_dict["tags"].items() if 'tags' in data_dict else[])])
 
-    def _hit_to_mlflow_metric(self, m_key: Any, m_val: Any) -> Metric:
+    def _dict_to_mlflow_metric(self, m_key: str, m_val: Dict) -> Metric:
         return Metric(key=m_key, value=m_val["value"], timestamp=m_val["timestamp"],
                       step=m_val["step"])
 
-    def _hit_to_mlflow_param(self, p_key: Any, p_val: Any) -> Param:
+    def _dict_to_mlflow_param(self, p_key: str, p_val: str) -> Param:
         return Param(key=p_key, value=p_val)
 
-    def _hit_to_mlflow_tag(self, t_key: Any, t_val: Any) -> RunTag:
+    def _dict_to_mlflow_tag(self, t_key: str, t_val: str) -> RunTag:
         return RunTag(key=t_key, value=t_val)
 
     def list_experiments(self, view_type: str = ViewType.ACTIVE_ONLY) -> List[Experiment]:
         stages = LifecycleStage.view_type_to_stages(view_type)
-        body = {
-            "query": {
-                "bool": {
-                    "filter": [
-                        {"terms": {"lifecycle_stage": stages}}
-                    ]
-                }
-            }
-        }
+        body = {"query": {"bool": {"filter": [{"terms": {"lifecycle_stage": stages}}]}}}
         response = self.es.search(index=ExperimentIndex.name, body=body)
-        return [self._hit_to_mlflow_experiment(e) for e in response["hits"]["hits"]]
+        return [self._dict_to_mlflow_experiment(e, e["_id"]) for e in response["hits"]["hits"]]
 
     def _list_experiments_name(self) -> List[str]:
-        body = {
-            "aggs": {
-                "exp_names": {
-                    "terms": {"field": "name"}
-                }
-            }
-        }
+        body = {"aggs": {"exp_names": {"terms": {"field": "name"}}}}
         response = self.es.search(index=ExperimentIndex.name,
                                   body=body, size=10000, _source=False)
         return [name["key"] for name in response["aggregations"]["exp_names"]["buckets"]]
@@ -150,7 +137,7 @@ class ElasticsearchStore(AbstractStore):
 
     def get_experiment(self, experiment_id: str) -> Experiment:
         experiment = self._get_experiment(experiment_id)
-        return self._hit_to_mlflow_experiment(experiment)
+        return self._dict_to_mlflow_experiment(experiment, experiment["_id"])
 
     def delete_experiment(self, experiment_id: str) -> None:
         experiment = self.get_experiment(experiment_id)
@@ -180,18 +167,6 @@ class ElasticsearchStore(AbstractStore):
         self._check_experiment_is_active(experiment)
         artifact_location = append_to_uri_path(experiment.artifact_location, run_id,
                                                ElasticsearchStore.ARTIFACTS_FOLDER_NAME)
-        run = Run(run_info=RunInfo(run_uuid=run_id,
-                                   experiment_id=experiment_id,
-                                   user_id=user_id,
-                                   status=RunStatus.to_string(RunStatus.RUNNING),
-                                   start_time=start_time,
-                                   end_time=None,
-                                   lifecycle_stage=LifecycleStage.ACTIVE,
-                                   artifact_uri=artifact_location,
-                                   run_id=run_id),
-                  run_data=RunData(metrics=[],
-                                   params=[],
-                                   tags=tags))
         tags_dict = {}
         for tag in tags:
             tags_dict[tag.key] = tag.value
@@ -212,44 +187,53 @@ class ElasticsearchStore(AbstractStore):
                 "source_version": "",
                 }
         self.es.create(index=RunIndex.name, id=run_id, body=body)
+        run = Run(run_info=self._dict_to_mlflow_run_info(body, run_id),
+                  run_data=RunData(metrics=[],
+                                   params=[],
+                                   tags=tags))
         return run
 
-    # def _check_run_is_active(self, run: ElasticRun) -> None:
-    #     if run.lifecycle_stage != LifecycleStage.ACTIVE:
-    #         raise MlflowException("The run {} must be in the 'active' state. Current state is {}."
-    #                               .format(run._id, run.lifecycle_stage),
-    #                               INVALID_PARAMETER_VALUE)
+    def _check_run_is_active(self, run: Dict) -> None:
+        if run["_source"]["lifecycle_stage"] != LifecycleStage.ACTIVE:
+            raise MlflowException("The run {} must be in the 'active' state. Current state is {}."
+                                  .format(run["_id"], run["_source"]["lifecycle_stage"]),
+                                  INVALID_PARAMETER_VALUE)
 
-    # def _check_run_is_deleted(self, run: ElasticRun) -> None:
-    #     if run.lifecycle_stage != LifecycleStage.DELETED:
-    #         raise MlflowException("The run {} must be in the 'deleted' state. Current state is {}"
-    #                               .format(run._id, run.lifecycle_stage),
-    #                               INVALID_PARAMETER_VALUE)
+    def _check_run_is_deleted(self, run: Dict) -> None:
+        if run["_source"]["lifecycle_stage"] != LifecycleStage.DELETED:
+            raise MlflowException("The run {} must be in the 'deleted' state. Current state is {}."
+                                  .format(run["_id"], run["_source"]["lifecycle_stage"]),
+                                  INVALID_PARAMETER_VALUE)
 
-    # def update_run_info(self, run_id: str, run_status: RunStatus, end_time: int) -> RunInfo:
-    #     run = self._get_run(run_id)
-    #     self._check_run_is_active(run)
-    #     run.update(status=RunStatus.to_string(run_status), end_time=end_time)
-    #     return run.to_mlflow_entity()._info
+    def update_run_info(self, run_id: str, run_status: RunStatus, end_time: int) -> RunInfo:
+        run = self._get_run(run_id)
+        self._check_run_is_active(run)
+        run.update(status=RunStatus.to_string(run_status), end_time=end_time)
+        body = {"doc": {"status": RunStatus.to_string(run_status), "end_time": end_time}}
+        info = self.es.update(index=RunIndex.name, id=run_id, body=body,
+                              _source_includes=["experiment_id", "user_id", "start_time", "status",
+                                                "end_time", "artifact_uri", "lifecycle_stage"])
+        return self._dict_to_mlflow_run_info(info["get"]["_source"], info["_id"])
 
     def get_run(self, run_id: str) -> Run:
         run = self._get_run(run_id)
-        print(run)
-        return self._hit_to_mlflow_run(run)
+        return self._dict_to_mlflow_run(run, run["_id"])
 
     def _get_run(self, run_id: str) -> Dict:
         run = self.es.get(index=RunIndex.name, id=run_id)
         return run
 
-    # def delete_run(self, run_id: str) -> None:
-    #     run = self._get_run(run_id)
-    #     self._check_run_is_active(run)
-    #     run.update(lifecycle_stage=LifecycleStage.DELETED)
+    def delete_run(self, run_id: str) -> None:
+        run = self._get_run(run_id)
+        self._check_run_is_active(run)
+        body = {"doc": {"lifecycle_stage": LifecycleStage.DELETED}}
+        self.es.update(index=RunIndex.name, id=run_id, body=body)
 
-    # def restore_run(self, run_id: str) -> None:
-    #     run = self._get_run(run_id)
-    #     self._check_run_is_deleted(run)
-    #     run.update(lifecycle_stage=LifecycleStage.ACTIVE)
+    def restore_run(self, run_id: str) -> None:
+        run = self._get_run(run_id)
+        self._check_run_is_deleted(run)
+        body = {"doc": {"lifecycle_stage": LifecycleStage.ACTIVE}}
+        self.es.update(index=RunIndex.name, id=run_id, body=body)
 
     # @staticmethod
     # def _update_latest_metric_if_necessary(new_metric: ElasticMetric, run: ElasticRun) -> None:
@@ -330,7 +314,7 @@ class ElasticsearchStore(AbstractStore):
     #     response = Search(index="mlflow-runs").filter("ids", values=[run_id]) \
     #         .filter('nested', inner_hits={"size": 100}, path="metrics",
     #                 query=Q('term', metrics__key=metric_key)).source(False).execute()
-    #     return ([self._hit_to_mlflow_metric(m["_source"]) for m in
+    #     return ([self._dict_to_mlflow_metric(m["_source"]) for m in
     #              response["hits"]["hits"][0].inner_hits.metrics.hits.hits]
     #             if (len(response["hits"]["hits"]) != 0) else [])
 
@@ -428,7 +412,7 @@ class ElasticsearchStore(AbstractStore):
     #     s = self._build_elasticsearch_query(parsed_filters, s)
     #     s = self._get_orderby_clauses(order_by, s)
     #     response = s.source(excludes=["metrics.*"])[offset:offset + max_results].execute()
-    #     runs = [self._hit_to_mlflow_run(r) for r in response]
+    #     runs = [self._dict_to_mlflow_run(r) for r in response]
     #     next_page_token = compute_next_token(len(runs))
     #     return runs, next_page_token
 
