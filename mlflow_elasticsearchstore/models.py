@@ -176,6 +176,7 @@ class RunIndex():
             "lifecycle_stage": {"type": "keyword"},
             "artifact_location": {"type": "text"},
             "latest_metrics": {"type": "flattened"},
+            "metrics": {"type": "flattened"},
             "params": {"type": "flattened"},
             "tags": {"type": "flattened"}
         }

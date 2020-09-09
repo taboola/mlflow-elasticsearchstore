@@ -219,7 +219,6 @@ def test_update_run_info_of_deleted_run(init_store):
         assert "must be in the 'active' state" in str(excinfo.value)
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.usefixtures('init_store')
 def test_log_metric_of_deleted_run(init_store):
     new_metric = Metric(key="new_metric", value=7.0, timestamp=10, step=0)
@@ -258,67 +257,70 @@ def test_restore_run_of_active_run(init_store):
         assert "must be in the 'deleted' state" in str(excinfo.value)
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.usefixtures('init_store')
 def test_log_metric(init_store):
     new_metric = Metric(key="new_metric", value=7.0, timestamp=10, step=0)
     init_store.log_metric("7b2e71956f3d4c08b042624a8d83700d", new_metric)
     actual_run = init_store._get_run("7b2e71956f3d4c08b042624a8d83700d")
-    assert ElasticMetric(key="new_metric", value=7.0, timestamp=10,
-                         step=0, is_nan=False) in actual_run.metrics
-    assert ElasticLatestMetric(key="new_metric", value=7.0, timestamp=10,
-                               step=0, is_nan=False) in actual_run.latest_metrics
+    assert "new_metric" in actual_run["_source"]["metrics"]
+    assert {"value": 7.0, "timestamp": 10, "step": 0,
+            "is_nan": False} in actual_run["_source"]["metrics"]["new_metric"]
+    assert "new_metric" in actual_run["_source"]["latest_metrics"]
+    assert actual_run["_source"]["latest_metrics"]["new_metric"] == {
+        "value": 7.0, "timestamp": 10, "step": 0, "is_nan": False}
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.usefixtures('init_store')
 def test_log_metric_with_nan_value(init_store):
     new_metric = Metric(key="nan_metric", value=math.nan, timestamp=10, step=0)
     init_store.log_metric("7b2e71956f3d4c08b042624a8d83700d", new_metric)
     actual_run = init_store._get_run("7b2e71956f3d4c08b042624a8d83700d")
-    assert ElasticMetric(key="nan_metric", value=0, timestamp=10,
-                         step=0, is_nan=True) in actual_run.metrics
-    assert ElasticLatestMetric(key="nan_metric", value=0, timestamp=10,
-                               step=0, is_nan=True) in actual_run.latest_metrics
+    assert "nan_metric" in actual_run["_source"]["metrics"]
+    assert {"value": 0, "timestamp": 10, "step": 0,
+            "is_nan": True} in actual_run["_source"]["metrics"]["nan_metric"]
+    assert "nan_metric" in actual_run["_source"]["latest_metrics"]
+    assert actual_run["_source"]["latest_metrics"]["nan_metric"] == {
+        "value": 0, "timestamp": 10, "step": 0, "is_nan": True}
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.usefixtures('init_store')
 def test_log_metric_with_inf_value(init_store):
     new_metric = Metric(key="inf_metric", value=1.7976931348623157e309, timestamp=10, step=0)
     init_store.log_metric("7b2e71956f3d4c08b042624a8d83700d", new_metric)
     actual_run = init_store._get_run("7b2e71956f3d4c08b042624a8d83700d")
-    assert ElasticMetric(key="inf_metric", value=1.7976931348623157e308,
-                         timestamp=10, step=0, is_nan=False) in actual_run.metrics
-    assert ElasticLatestMetric(key="inf_metric", value=1.7976931348623157e308,
-                               timestamp=10, step=0, is_nan=False) in actual_run.latest_metrics
+    assert "inf_metric" in actual_run["_source"]["metrics"]
+    assert {"value": 1.7976931348623157e308, "timestamp": 10, "step": 0,
+            "is_nan": False} in actual_run["_source"]["metrics"]["inf_metric"]
+    assert "inf_metric" in actual_run["_source"]["latest_metrics"]
+    assert actual_run["_source"]["latest_metrics"]["inf_metric"] == {
+        "value": 1.7976931348623157e308, "timestamp": 10, "step": 0, "is_nan": False}
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.usefixtures('init_store')
 def test_log_metric_with_negative_inf_value(init_store):
     new_metric = Metric(key="negative_inf_metric",
                         value=-1.7976931348623157e309, timestamp=10, step=0)
     init_store.log_metric("7b2e71956f3d4c08b042624a8d83700d", new_metric)
     actual_run = init_store._get_run("7b2e71956f3d4c08b042624a8d83700d")
-    assert ElasticMetric(key="negative_inf_metric",
-                         value=-1.7976931348623157e308, timestamp=10,
-                         step=0, is_nan=False) in actual_run.metrics
-    assert ElasticLatestMetric(key="negative_inf_metric",
-                               value=-1.7976931348623157e308, timestamp=10,
-                               step=0, is_nan=False) in actual_run.latest_metrics
+    assert "negative_inf_metric" in actual_run["_source"]["metrics"]
+    assert {"value": -1.7976931348623157e308, "timestamp": 10, "step": 0,
+            "is_nan": False} in actual_run["_source"]["metrics"]["negative_inf_metric"]
+    assert "negative_inf_metric" in actual_run["_source"]["latest_metrics"]
+    assert actual_run["_source"]["latest_metrics"]["negative_inf_metric"] == {
+        "value": -1.7976931348623157e308, "timestamp": 10, "step": 0, "is_nan": False}
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.usefixtures('init_store')
 def test_log_metric_with_existing_key(init_store):
     new_metric = Metric(key="new_metric", value=-10, timestamp=20, step=1)
     init_store.log_metric("7b2e71956f3d4c08b042624a8d83700d", new_metric)
     actual_run = init_store._get_run("7b2e71956f3d4c08b042624a8d83700d")
-    assert ElasticMetric(key="new_metric", value=-10,
-                         timestamp=20, step=1, is_nan=False) in actual_run.metrics
-    assert ElasticLatestMetric(key="new_metric", value=-10,
-                               timestamp=20, step=1, is_nan=False) in actual_run.latest_metrics
+    assert "new_metric" in actual_run["_source"]["metrics"]
+    assert {"value": -10, "timestamp": 20, "step": 1,
+            "is_nan": False} in actual_run["_source"]["metrics"]["new_metric"]
+    assert "new_metric" in actual_run["_source"]["latest_metrics"]
+    assert actual_run["_source"]["latest_metrics"]["new_metric"] == {
+        "value": -10, "timestamp": 20, "step": 1, "is_nan": False}
 
 
 @pytest.mark.usefixtures('init_store')

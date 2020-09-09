@@ -37,7 +37,9 @@ run_response = {'_index': 'mlflow-runs', '_type': '_doc', '_id': '1',
                             'lifecycle_stage': 'active', 'artifact_uri': 'artifact_location',
                             'latest_metrics': {'metric1': {'value': 1, 'timestamp': 1,
                                                            'step': 1, 'is_nan': False}},
-                            'params': {'param1': 'Val1'},
+                            'metrics': {'metric1': [{'value': 1, 'timestamp': 1,
+                                                     'step': 1, 'is_nan': False}]},
+                            'params': {'param1': 'val1'},
                             'tags': {'tag1': 'val1'}}}
 run = ElasticRun(meta={'id': "1"},
                  experiment_id="experiment_id", user_id="user_id",
@@ -233,21 +235,31 @@ def test_get_run(elastic_get_mock, create_store):
     assert expected_run._data._tags == real_run._data._tags
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
-@mock.patch('mlflow_elasticsearchstore.models.ElasticRun.get')
-@mock.patch('mlflow_elasticsearchstore.elasticsearch_store.ElasticsearchStore.'
-            '_update_latest_metric_if_necessary')
+@pytest.mark.parametrize("test_metric,test_body",
+                         [(Metric(key="metric1", value=2, timestamp=1, step=2,),
+                           {"script": {"source": 'ctx._source.latest_metrics.metric1 '
+                                       '= params.metric; '
+                                       'ctx._source.metrics.metric1.add(params.metric);',
+                                       "params": {"metric": {"value": 2,
+                                                             "timestamp": 1,
+                                                             "step": 2,
+                                                             "is_nan": False}}}}),
+                          (Metric(key="metric2", value=2, timestamp=1, step=1),
+                           {"script": {"source": 'ctx._source.latest_metrics.metric2 '
+                                       '= params.metric; '
+                                       'ctx._source.metrics.metric2 = [params.metric];',
+                                       "params": {"metric": {"value": 2,
+                                                             "timestamp": 1,
+                                                             "step": 1,
+                                                             "is_nan": False}}}})])
+@mock.patch('elasticsearch.Elasticsearch.get')
+@mock.patch('elasticsearch.Elasticsearch.update')
 @pytest.mark.usefixtures('create_store')
-def test_log_metric(_update_latest_metric_if_necessary_mock, elastic_run_get_mock, create_store):
-    elastic_run_get_mock.return_value = run
-    run.metrics = mock.MagicMock()
-    run.metrics.append = mock.MagicMock()
-    run.save = mock.MagicMock()
-    create_store.log_metric("1", metric)
-    elastic_run_get_mock.assert_called_once_with(id="1")
-    _update_latest_metric_if_necessary_mock.assert_called_once_with(elastic_metric, run)
-    run.metrics.append.assert_called_once_with(elastic_metric)
-    run.save.assert_called_once_with()
+def test_log_metric(elastic_update_mock, elastic_get_mock, test_metric, test_body, create_store):
+    elastic_get_mock.return_value = run_response
+    create_store.log_metric("1", test_metric)
+    elastic_get_mock.assert_called_once_with(index=RunIndex.name, id="1")
+    elastic_update_mock.assert_called_once_with(index=RunIndex.name, id="1", body=test_body)
 
 
 @mock.patch('elasticsearch.Elasticsearch.get')
@@ -283,24 +295,22 @@ def test_set_tag(elastic_update_mock, elastic_get_mock, create_store):
         index=RunIndex.name, id="1", body={"doc": {"tags": {"tag2": "val2"}}})
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
-@pytest.mark.parametrize("test_elastic_metric,test_elastic_latest_metrics",
-                         [(ElasticMetric(key="metric1", value=2, timestamp=1,
-                                         step=2, is_nan=False),
-                           [ElasticLatestMetric(key="metric1", value=2, timestamp=1,
-                                                step=2, is_nan=False)]),
-
-                          (ElasticMetric(key="metric2", value=2, timestamp=1,
-                                         step=1, is_nan=False),
-                           [ElasticLatestMetric(key="metric1", value=2, timestamp=1,
-                                                step=2, is_nan=False),
-                            ElasticLatestMetric(key="metric2", value=2, timestamp=1,
-                                                step=1, is_nan=False)])])
+@pytest.mark.parametrize("test_metric,test_body",
+                         [(Metric(key="metric1", value=2, timestamp=1, step=2,),
+                           {"script": {"source": 'ctx._source.latest_metrics.metric1 '
+                                       '= params.metric; ',
+                                       "params": {}}}),
+                          (Metric(key="metric1", value=2, timestamp=0, step=0,),
+                           {"script": {"source": "", "params": {}}}),
+                          (Metric(key="metric2", value=2, timestamp=1, step=1),
+                           {"script": {"source": 'ctx._source.latest_metrics.metric2 '
+                                       '= params.metric; ',
+                                       "params": {}}})])
 @pytest.mark.usefixtures('create_store')
-def test__update_latest_metric_if_necessary(test_elastic_metric, test_elastic_latest_metrics,
-                                            create_store):
-    create_store._update_latest_metric_if_necessary(test_elastic_metric, run)
-    assert run.latest_metrics == test_elastic_latest_metrics
+def test__update_latest_metric_if_necessary(test_metric, test_body, create_store):
+    body = {"script": {"source": "", "params": {}}}
+    create_store._update_latest_metric_if_necessary(body, test_metric, run_response)
+    assert body == test_body
 
 
 @pytest.mark.skip(reason="no way of currently testing this")

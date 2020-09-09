@@ -236,48 +236,46 @@ class ElasticsearchStore(AbstractStore):
         body = {"doc": {"lifecycle_stage": LifecycleStage.ACTIVE}}
         self.es.update(index=RunIndex.name, id=run_id, body=body)
 
-    # @staticmethod
-    # def _update_latest_metric_if_necessary(new_metric: ElasticMetric, run: ElasticRun) -> None:
-    #     def _compare_metrics(metric_a: ElasticLatestMetric,
-    #                          metric_b: ElasticLatestMetric) -> bool:
-    #         return (metric_a.step, metric_a.timestamp, metric_a.value) > \
-    #                (metric_b.step, metric_b.timestamp, metric_b.value)
-    #     new_latest_metric = ElasticLatestMetric(key=new_metric.key,
-    #                                             value=new_metric.value,
-    #                                             timestamp=new_metric.timestamp,
-    #                                             step=new_metric.step,
-    #                                             is_nan=new_metric.is_nan)
-    #     latest_metric_exist = False
-    #     for i, latest_metric in enumerate(run.latest_metrics):
-    #         if latest_metric.key == new_metric.key:
-    #             latest_metric_exist = True
-    #             if _compare_metrics(new_latest_metric, latest_metric):
-    #                 run.latest_metrics[i] = new_latest_metric
-    #     if not (latest_metric_exist):
-    #         run.latest_metrics.append(new_latest_metric)
+    @staticmethod
+    def _update_latest_metric_if_necessary(body: Dict, metric: Metric, run: Dict) -> None:
+        def _compare_metrics(metric_a: Dict,
+                             metric_b: Dict) -> bool:
+            return (metric_a["step"], metric_a["timestamp"], metric_a["value"]) > \
+                   (metric_b["step"], metric_b["timestamp"], metric_b["value"])
+        update_latest_metric = False
+        if metric.key in run["_source"]["latest_metrics"]:
+            if _compare_metrics(dict(metric), run["_source"]["latest_metrics"][metric.key]):
+                update_latest_metric = True
+        else:
+            update_latest_metric = True
+        if update_latest_metric:
+            body["script"]["source"] = f'ctx._source.latest_metrics.{metric.key} = params.metric; '
 
-    # def _log_metric(self, run: Run, metric: Metric) -> None:
-    #     _validate_metric(metric.key, metric.value, metric.timestamp, metric.step)
-    #     is_nan = math.isnan(metric.value)
-    #     if is_nan:
-    #         value = 0.
-    #     elif math.isinf(metric.value):
-    #         value = 1.7976931348623157e308 if metric.value > 0 else -1.7976931348623157e308
-    #     else:
-    #         value = metric.value
-    #     new_metric = ElasticMetric(key=metric.key,
-    #                                value=value,
-    #                                timestamp=metric.timestamp,
-    #                                step=metric.step,
-    #                                is_nan=is_nan)
-    #     self._update_latest_metric_if_necessary(new_metric, run)
-    #     run.metrics.append(new_metric)
+    def _log_metric(self, body: Dict, run: Dict, metric: Metric) -> None:
+        _validate_metric(metric.key, metric.value, metric.timestamp, metric.step)
+        is_nan = math.isnan(metric.value)
+        if is_nan:
+            value = 0.
+        elif math.isinf(metric.value):
+            value = 1.7976931348623157e308 if metric.value > 0 else -1.7976931348623157e308
+        else:
+            value = metric.value
+        self._update_latest_metric_if_necessary(body, metric, run)
+        body["script"]["params"]["metric"] = {"value": value,
+                                              "timestamp": metric.timestamp,
+                                              "step": metric.step,
+                                              "is_nan": is_nan}
+        if metric.key in run["_source"]["metrics"]:
+            body["script"]["source"] += f'ctx._source.metrics.{metric.key}.add(params.metric);'
+        else:
+            body["script"]["source"] += f'ctx._source.metrics.{metric.key} = [params.metric];'
 
-    # def log_metric(self, run_id: str, metric: Metric) -> None:
-    #     run = self._get_run(run_id=run_id)
-    #     self._check_run_is_active(run)
-    #     self._log_metric(run, metric)
-    #     run.save()
+    def log_metric(self, run_id: str, metric: Metric) -> None:
+        run = self._get_run(run_id=run_id)
+        self._check_run_is_active(run)
+        body: dict = {"script": {"source": "", "params": {}}}
+        self._log_metric(body, run, metric)
+        self.es.update(index=RunIndex.name, id=run_id, body=body)
 
     def _log_param(self, body: Dict, param: Param) -> None:
         _validate_param(param.key, param.value)
