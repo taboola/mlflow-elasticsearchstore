@@ -286,7 +286,7 @@ class ElasticsearchStore(AbstractStore):
     def log_param(self, run_id: str, param: Param) -> None:
         run = self._get_run(run_id=run_id)
         self._check_run_is_active(run)
-        body = {"doc": {"params": {}}}
+        body: dict = {"doc": {"params": {}}}
         self._log_param(body, param)
         self.es.update(index=RunIndex.name, id=run_id, body=body)
 
@@ -304,7 +304,7 @@ class ElasticsearchStore(AbstractStore):
     def set_tag(self, run_id: str, tag: RunTag) -> None:
         run = self._get_run(run_id=run_id)
         self._check_run_is_active(run)
-        body = {"doc": {"tags": {}}}
+        body: dict = {"doc": {"tags": {}}}
         self._set_tag(body, tag)
         self.es.update(index=RunIndex.name, id=run_id, body=body)
 
