@@ -228,7 +228,6 @@ def test_log_metric_of_deleted_run(init_store):
         assert "must be in the 'active' state" in str(excinfo.value)
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.usefixtures('init_store')
 def test_log_param_of_deleted_run(init_store):
     new_param = Param(key="new_param", value="new_value")
@@ -237,7 +236,6 @@ def test_log_param_of_deleted_run(init_store):
         assert "must be in the 'active' state" in str(excinfo.value)
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.usefixtures('init_store')
 def test_set_tag_of_deleted_run(init_store):
     new_tag = RunTag(key="new_tag", value="new_value")
@@ -246,7 +244,6 @@ def test_set_tag_of_deleted_run(init_store):
         assert "must be in the 'active' state" in str(excinfo.value)
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.usefixtures('init_store')
 def test_restore_run(init_store):
     init_store.restore_run("d57a45f3763e4827b7c03f03d60dbbe1")
@@ -254,7 +251,6 @@ def test_restore_run(init_store):
     assert run_restored._info._lifecycle_stage == LifecycleStage.ACTIVE
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.usefixtures('init_store')
 def test_restore_run_of_active_run(init_store):
     with pytest.raises(MlflowException) as excinfo:
@@ -325,32 +321,28 @@ def test_log_metric_with_existing_key(init_store):
                                timestamp=20, step=1, is_nan=False) in actual_run.latest_metrics
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.usefixtures('init_store')
 def test_log_param(init_store):
     new_param = Param(key="new_param", value="new_value")
     init_store.log_param("7b2e71956f3d4c08b042624a8d83700d", new_param)
     actual_run = init_store._get_run("7b2e71956f3d4c08b042624a8d83700d")
-    assert ElasticParam(key="new_param", value="new_value") in actual_run.params
+    assert actual_run["_source"]["params"]["new_param"] == "new_value"
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.usefixtures('init_store')
 def test_set_tag(init_store):
     new_tag = RunTag(key="new_tag", value="new_value")
     init_store.set_tag("7b2e71956f3d4c08b042624a8d83700d", new_tag)
     actual_run = init_store._get_run("7b2e71956f3d4c08b042624a8d83700d")
-    assert ElasticTag(key="new_tag", value="new_value") in actual_run.tags
+    assert actual_run["_source"]["tags"]["new_tag"] == "new_value"
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.usefixtures('init_store')
 def test_experiment_set_tag(init_store):
     new_experiment_tag = ExperimentTag(key="new_tag", value="new_value")
-    expected_elastic_tags = [ElasticExperimentTag(key="new_tag", value="new_value")]
     init_store.set_experiment_tag("hTb553MBNoOYfhXjnnQh", new_experiment_tag)
     actual_experiment = init_store._get_experiment("hTb553MBNoOYfhXjnnQh")
-    assert actual_experiment.tags == expected_elastic_tags
+    assert actual_experiment["_source"]["tags"]["new_tag"] == "new_value"
 
 
 @pytest.mark.skip(reason="no way of currently testing this")

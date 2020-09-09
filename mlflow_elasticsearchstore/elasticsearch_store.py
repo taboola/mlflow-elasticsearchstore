@@ -123,11 +123,12 @@ class ElasticsearchStore(AbstractStore):
         response = self.es.index(index=ExperimentIndex.name, body=body, refresh=True)
         return str(response["_id"])
 
-    def _check_experiment_is_active(self, experiment: Experiment) -> None:
-        if experiment.lifecycle_stage != LifecycleStage.ACTIVE:
+    def _check_experiment_is_active(self, experiment: Dict) -> None:
+        if experiment["_source"]["lifecycle_stage"] != LifecycleStage.ACTIVE:
             raise MlflowException(
                 "The experiment {} must be in the 'active' state. "
-                "Current state is {}.".format(experiment.experiment_id, experiment.lifecycle_stage),
+                "Current state is {}.".format(
+                    experiment["_id"], experiment["_source"]["lifecycle_stage"]),
                 INVALID_PARAMETER_VALUE,
             )
 
@@ -163,9 +164,9 @@ class ElasticsearchStore(AbstractStore):
     def create_run(self, experiment_id: str, user_id: str,
                    start_time: int, tags: List[RunTag]) -> Run:
         run_id = uuid.uuid4().hex
-        experiment = self.get_experiment(experiment_id)
+        experiment = self._get_experiment(experiment_id)
         self._check_experiment_is_active(experiment)
-        artifact_location = append_to_uri_path(experiment.artifact_location, run_id,
+        artifact_location = append_to_uri_path(experiment["_source"]["artifact_location"], run_id,
                                                ElasticsearchStore.ARTIFACTS_FOLDER_NAME)
         tags_dict = {}
         for tag in tags:
@@ -211,8 +212,8 @@ class ElasticsearchStore(AbstractStore):
         run.update(status=RunStatus.to_string(run_status), end_time=end_time)
         body = {"doc": {"status": RunStatus.to_string(run_status), "end_time": end_time}}
         info = self.es.update(index=RunIndex.name, id=run_id, body=body,
-                              _source_includes=["experiment_id", "user_id", "start_time", "status",
-                                                "end_time", "artifact_uri", "lifecycle_stage"])
+                              _source=["experiment_id", "user_id", "start_time", "status",
+                                       "end_time", "artifact_uri", "lifecycle_stage"])
         return self._dict_to_mlflow_run_info(info["get"]["_source"], info["_id"])
 
     def get_run(self, run_id: str) -> Run:
@@ -278,37 +279,34 @@ class ElasticsearchStore(AbstractStore):
     #     self._log_metric(run, metric)
     #     run.save()
 
-    # def _log_param(self, run: Run, param: Param) -> None:
-    #     _validate_param(param.key, param.value)
-    #     new_param = ElasticParam(key=param.key,
-    #                              value=param.value)
-    #     run.params.append(new_param)
+    def _log_param(self, body: Dict, param: Param) -> None:
+        _validate_param(param.key, param.value)
+        body["doc"]["params"][param.key] = param.value
 
-    # def log_param(self, run_id: str, param: Param) -> None:
-    #     run = self._get_run(run_id=run_id)
-    #     self._check_run_is_active(run)
-    #     self._log_param(run, param)
-    #     run.save()
+    def log_param(self, run_id: str, param: Param) -> None:
+        run = self._get_run(run_id=run_id)
+        self._check_run_is_active(run)
+        body = {"doc": {"params": {}}}
+        self._log_param(body, param)
+        self.es.update(index=RunIndex.name, id=run_id, body=body)
 
-    # def set_experiment_tag(self, experiment_id: str, tag: ExperimentTag) -> None:
-    #     _validate_experiment_tag(tag.key, tag.value)
-    #     experiment = self._get_experiment(experiment_id)
-    #     self._check_experiment_is_active(experiment.to_mlflow_entity())
-    #     new_tag = ElasticExperimentTag(key=tag.key, value=tag.value)
-    #     experiment.tags.append(new_tag)
-    #     experiment.save()
+    def set_experiment_tag(self, experiment_id: str, tag: ExperimentTag) -> None:
+        _validate_experiment_tag(tag.key, tag.value)
+        experiment = self._get_experiment(experiment_id)
+        self._check_experiment_is_active(experiment)
+        body = {"doc": {"tags": {tag.key: tag.value}}}
+        self.es.update(index=ExperimentIndex.name, id=experiment_id, body=body)
 
-    # def _set_tag(self, run: Run, tag: RunTag) -> None:
-    #     _validate_tag(tag.key, tag.value)
-    #     new_tag = ElasticTag(key=tag.key,
-    #                          value=tag.value)
-    #     run.tags.append(new_tag)
+    def _set_tag(self, body: Dict, tag: RunTag) -> None:
+        _validate_tag(tag.key, tag.value)
+        body["doc"]["tags"][tag.key] = tag.value
 
-    # def set_tag(self, run_id: str, tag: RunTag) -> None:
-    #     run = self._get_run(run_id=run_id)
-    #     self._check_run_is_active(run)
-    #     self._set_tag(run, tag)
-    #     run.save()
+    def set_tag(self, run_id: str, tag: RunTag) -> None:
+        run = self._get_run(run_id=run_id)
+        self._check_run_is_active(run)
+        body = {"doc": {"tags": {}}}
+        self._set_tag(body, tag)
+        self.es.update(index=RunIndex.name, id=run_id, body=body)
 
     # def get_metric_history(self, run_id: str, metric_key: str) -> List[Metric]:
     #     response = Search(index="mlflow-runs").filter("ids", values=[run_id]) \

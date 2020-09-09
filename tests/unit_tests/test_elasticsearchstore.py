@@ -24,9 +24,6 @@ experiment_deleted_response = {'_index': 'mlflow-experiments', '_type': '_doc', 
                                '_source': {'name': 'name',
                                            'lifecycle_stage': 'deleted',
                                            'artifact_location': 'artifact_location'}}
-deleted_experiment = ElasticExperiment(meta={'id': "1"}, name="name",
-                                       lifecycle_stage=LifecycleStage.DELETED,
-                                       artifact_location="artifact_location")
 
 experiment_tag = ExperimentTag(key="tag1", value="val1")
 elastic_experiment_tag = ElasticExperimentTag(key="tag1", value="val1")
@@ -253,46 +250,37 @@ def test_log_metric(_update_latest_metric_if_necessary_mock, elastic_run_get_moc
     run.save.assert_called_once_with()
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
-@mock.patch('mlflow_elasticsearchstore.models.ElasticRun.get')
+@mock.patch('elasticsearch.Elasticsearch.get')
+@mock.patch('elasticsearch.Elasticsearch.update')
 @pytest.mark.usefixtures('create_store')
-def test_log_param(elastic_run_get_mock, create_store):
-    elastic_run_get_mock.return_value = run
-    run.params = mock.MagicMock()
-    run.params.append = mock.MagicMock()
-    run.save = mock.MagicMock()
+def test_log_param(elastic_update_mock, elastic_get_mock, create_store):
+    elastic_get_mock.return_value = run_response
     create_store.log_param("1", param)
-    elastic_run_get_mock.assert_called_once_with(id="1")
-    run.params.append.assert_called_once_with(elastic_param)
-    run.save.assert_called_once_with()
+    elastic_get_mock.assert_called_once_with(index=RunIndex.name, id="1")
+    elastic_update_mock.assert_called_once_with(
+        index=RunIndex.name, id="1", body={"doc": {"params": {"param2": "val2"}}})
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
-@mock.patch('mlflow_elasticsearchstore.models.ElasticExperiment.get')
+@mock.patch('elasticsearch.Elasticsearch.get')
+@mock.patch('elasticsearch.Elasticsearch.update')
 @pytest.mark.usefixtures('create_store')
-def test_set_experiment_tag(elastic_experiment_get_mock, create_store):
-    elastic_experiment_get_mock.return_value = experiment
-    experiment.tags = mock.MagicMock()
-    experiment.tags.append = mock.MagicMock()
-    experiment.save = mock.MagicMock()
+def test_set_experiment_tag(elastic_update_mock, elastic_get_mock, create_store):
+    elastic_get_mock.return_value = experiment_response
     create_store.set_experiment_tag("1", experiment_tag)
-    elastic_experiment_get_mock.assert_called_once_with(id="1")
-    experiment.tags.append.assert_called_once_with(elastic_experiment_tag)
-    experiment.save.assert_called_once_with()
+    elastic_get_mock.assert_called_once_with(index=ExperimentIndex.name, id="1")
+    elastic_update_mock.assert_called_once_with(
+        index=ExperimentIndex.name, id="1", body={"doc": {"tags": {"tag1": "val1"}}})
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
-@mock.patch('mlflow_elasticsearchstore.models.ElasticRun.get')
+@mock.patch('elasticsearch.Elasticsearch.get')
+@mock.patch('elasticsearch.Elasticsearch.update')
 @pytest.mark.usefixtures('create_store')
-def test_set_tag(elastic_run_get_mock, create_store):
-    elastic_run_get_mock.return_value = run
-    run.tags = mock.MagicMock()
-    run.tags.append = mock.MagicMock()
-    run.save = mock.MagicMock()
+def test_set_tag(elastic_update_mock, elastic_get_mock, create_store):
+    elastic_get_mock.return_value = run_response
     create_store.set_tag("1", tag)
-    elastic_run_get_mock.assert_called_once_with(id="1")
-    run.tags.append.assert_called_once_with(elastic_tag)
-    run.save.assert_called_once_with()
+    elastic_get_mock.assert_called_once_with(index=RunIndex.name, id="1")
+    elastic_update_mock.assert_called_once_with(
+        index=RunIndex.name, id="1", body={"doc": {"tags": {"tag2": "val2"}}})
 
 
 @pytest.mark.skip(reason="no way of currently testing this")
