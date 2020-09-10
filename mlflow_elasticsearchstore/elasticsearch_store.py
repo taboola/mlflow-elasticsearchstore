@@ -382,6 +382,10 @@ class ElasticsearchStore(AbstractStore):
         next_page_token = compute_next_token(len(runs))
         return runs, next_page_token
 
+    def update_artifacts_location(self, run_id: str, new_artifacts_location: str) -> None:
+        run = self._get_run(run_id=run_id)
+        run.update(artifact_uri=new_artifacts_location)
+
     def log_batch(self, run_id: str, metrics: List[Metric],
                   params: List[Param], tags: List[RunTag]) -> None:
         _validate_run_id(run_id)
