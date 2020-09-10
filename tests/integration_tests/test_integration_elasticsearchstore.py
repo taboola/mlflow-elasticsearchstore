@@ -43,9 +43,9 @@ def test_list_experiments(init_store):
 
 @pytest.mark.usefixtures('init_store')
 def test_get_experiment_with_fake_id(init_store):
-    with pytest.raises(NotFoundError) as excinfo:
+    with pytest.raises(MlflowException) as excinfo:
         init_store.get_experiment(experiment_id="fake_id")
-        assert "404" in excinfo
+        assert "No Experiment with id=fake_id exists" in excinfo
 
 
 @pytest.mark.usefixtures('init_store')
@@ -114,7 +114,6 @@ def test_rename_experiment_of_deleted_experiment(init_store):
         assert "Cannot rename a non-active experiment." in str(excinfo.value)
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.usefixtures('init_store')
 def test_set_experiment_tag_of_non_active_experiment(init_store):
     new_experiment_tag = ExperimentTag(key="new_tag", value="new_value")
@@ -383,7 +382,6 @@ def test_log_batch(init_store):
         assert tag in actual_run.tags
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.usefixtures('init_store')
 def test_get_metric_history(init_store):
     expected_metric_history = [Metric(key="metric0", value=15.0, timestamp=1597324762700, step=0),
@@ -395,7 +393,6 @@ def test_get_metric_history(init_store):
         assert metric.__dict__ == expected_metric_history[i].__dict__
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.usefixtures('init_store')
 def test_get_metric_history_with_fake_key(init_store):
     expected_metric_history = []
@@ -404,13 +401,11 @@ def test_get_metric_history_with_fake_key(init_store):
     assert actual_metric_history == expected_metric_history
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.usefixtures('init_store')
 def test_get_metric_history_with_fake_run_id(init_store):
-    expected_metric_history = []
-    actual_metric_history = init_store.get_metric_history(
-        "fake_run_id", "metric0")
-    assert actual_metric_history == expected_metric_history
+    with pytest.raises(MlflowException) as excinfo:
+        init_store.get_metric_history("fake_run_id", "metric0")
+        assert "Run with id=fake_run_id not found" in str(excinfo.value)
 
 
 @pytest.mark.skip(reason="no way of currently testing this")

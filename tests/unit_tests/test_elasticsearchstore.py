@@ -41,6 +41,19 @@ run_response = {'_index': 'mlflow-runs', '_type': '_doc', '_id': '1',
                                                      'step': 1, 'is_nan': False}]},
                             'params': {'param1': 'val1'},
                             'tags': {'tag1': 'val1'}}}
+
+deleted_run_response = {'_index': 'mlflow-runs', '_type': '_doc', '_id': '1',
+                        '_version': 1, '_seq_no': 0, '_primary_term': 1, 'found': True,
+                        '_source': {'experiment_id': 'experiment_id', 'user_id': 'user_id',
+                                    'status': 'RUNNING', 'start_time': 1597324762662,
+                                    'lifecycle_stage': 'deleted',
+                                    'artifact_uri': 'artifact_location',
+                                    'latest_metrics': {'metric1': {'value': 1, 'timestamp': 1,
+                                                                   'step': 1, 'is_nan': False}},
+                                    'metrics': {'metric1': [{'value': 1, 'timestamp': 1,
+                                                             'step': 1, 'is_nan': False}]},
+                                    'params': {'param1': 'val1'},
+                                    'tags': {'tag1': 'val1'}}}
 run = ElasticRun(meta={'id': "1"},
                  experiment_id="experiment_id", user_id="user_id",
                  status=RunStatus.to_string(RunStatus.RUNNING),
@@ -163,7 +176,8 @@ def test_create_run(uuid_mock, elastic_get_mock,
     real_run = create_store.create_run(
         experiment_id="1", user_id="user_id", start_time=1, tags=[])
     uuid_mock.assert_called_once_with()
-    elastic_get_mock.assert_called_once_with(index=ExperimentIndex.name, id="1")
+    elastic_get_mock.assert_called_once_with(index=ExperimentIndex.name, id="1", _source=[
+                                             "lifecycle_stage", "artifact_location"])
     body = {"experiment_id": "1",
             "user_id": "user_id",
             "status": RunStatus.to_string(RunStatus.RUNNING),
@@ -194,32 +208,38 @@ def test_create_run(uuid_mock, elastic_get_mock,
 def test_delete_run(elastic_get_mock, elastic_update_mock, create_store):
     elastic_get_mock.return_value = run_response
     create_store.delete_run("1")
-    elastic_get_mock.assert_called_once_with(index=RunIndex.name, id="1")
+    elastic_get_mock.assert_called_once_with(
+        index=RunIndex.name, id="1", _source=["lifecycle_stage"])
     elastic_update_mock.assert_called_once_with(
         index=RunIndex.name, id="1", body={"doc": {"lifecycle_stage": LifecycleStage.DELETED}})
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
-@mock.patch('mlflow_elasticsearchstore.models.ElasticRun.get')
+@mock.patch('elasticsearch.Elasticsearch.update')
+@mock.patch('elasticsearch.Elasticsearch.get')
 @pytest.mark.usefixtures('create_store')
-def test_restore_run(elastic_run_get_mock, create_store):
-    elastic_run_get_mock.return_value = deleted_run
-    deleted_run.update = mock.MagicMock()
+def test_restore_run(elastic_get_mock, elastic_update_mock, create_store):
+    elastic_get_mock.return_value = deleted_run_response
     create_store.restore_run("1")
-    elastic_run_get_mock.assert_called_once_with(id="1")
-    deleted_run.update.assert_called_once_with(lifecycle_stage=LifecycleStage.ACTIVE)
+    elastic_get_mock.assert_called_once_with(
+        index=RunIndex.name, id="1", _source=["lifecycle_stage"])
+    elastic_update_mock.assert_called_once_with(
+        index=RunIndex.name, id="1", body={"doc": {"lifecycle_stage": LifecycleStage.ACTIVE}})
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
-@mock.patch('mlflow_elasticsearchstore.models.ElasticRun.get')
+@mock.patch('elasticsearch.Elasticsearch.update')
+@mock.patch('elasticsearch.Elasticsearch.get')
 @pytest.mark.usefixtures('create_store')
-def test_update_run_info(elastic_run_get_mock, create_store):
-    elastic_run_get_mock.return_value = run
-    run.update = mock.MagicMock()
+def test_update_run_info(elastic_get_mock, elastic_update_mock, create_store):
+    elastic_get_mock.return_value = run_response
     create_store.update_run_info("1", RunStatus.FINISHED, 2)
-    elastic_run_get_mock.assert_called_once_with(id="1")
-    run.update.assert_called_once_with(
-        status=RunStatus.to_string(RunStatus.FINISHED), end_time=2)
+    elastic_get_mock.assert_called_once_with(
+        index=RunIndex.name, id="1", _source=["lifecycle_stage"])
+    elastic_update_mock.assert_called_once_with(
+        index=RunIndex.name, id="1", body={"doc":
+                                           {"status": RunStatus.to_string(RunStatus.FINISHED),
+                                            "end_time": 2}},
+        _source=["experiment_id", "user_id", "start_time", "status",
+                 "end_time", "artifact_uri", "lifecycle_stage"])
 
 
 @mock.patch('elasticsearch.Elasticsearch.get')
@@ -228,7 +248,8 @@ def test_get_run(elastic_get_mock, create_store):
     elastic_get_mock.return_value = run_response
     expected_run = create_store._dict_to_mlflow_run(run_response, run_response["_id"])
     real_run = create_store.get_run("1")
-    elastic_get_mock.assert_called_once_with(index=RunIndex.name, id="1")
+    elastic_get_mock.assert_called_once_with(
+        index=RunIndex.name, id="1", _source_excludes=["metrics"])
     assert expected_run._info == real_run._info
     assert expected_run._data._metrics == real_run._data._metrics
     assert expected_run._data._params == real_run._data._params
@@ -258,7 +279,8 @@ def test_get_run(elastic_get_mock, create_store):
 def test_log_metric(elastic_update_mock, elastic_get_mock, test_metric, test_body, create_store):
     elastic_get_mock.return_value = run_response
     create_store.log_metric("1", test_metric)
-    elastic_get_mock.assert_called_once_with(index=RunIndex.name, id="1")
+    elastic_get_mock.assert_called_once_with(index=RunIndex.name, id="1", _source=[
+                                             "lifecycle_stage", "metrics", "latest_metrics"])
     elastic_update_mock.assert_called_once_with(index=RunIndex.name, id="1", body=test_body)
 
 
@@ -268,7 +290,8 @@ def test_log_metric(elastic_update_mock, elastic_get_mock, test_metric, test_bod
 def test_log_param(elastic_update_mock, elastic_get_mock, create_store):
     elastic_get_mock.return_value = run_response
     create_store.log_param("1", param)
-    elastic_get_mock.assert_called_once_with(index=RunIndex.name, id="1")
+    elastic_get_mock.assert_called_once_with(
+        index=RunIndex.name, id="1", _source=["lifecycle_stage"])
     elastic_update_mock.assert_called_once_with(
         index=RunIndex.name, id="1", body={"doc": {"params": {"param2": "val2"}}})
 
@@ -279,7 +302,8 @@ def test_log_param(elastic_update_mock, elastic_get_mock, create_store):
 def test_set_experiment_tag(elastic_update_mock, elastic_get_mock, create_store):
     elastic_get_mock.return_value = experiment_response
     create_store.set_experiment_tag("1", experiment_tag)
-    elastic_get_mock.assert_called_once_with(index=ExperimentIndex.name, id="1")
+    elastic_get_mock.assert_called_once_with(
+        index=ExperimentIndex.name, id="1", _source=["lifecycle_stage"])
     elastic_update_mock.assert_called_once_with(
         index=ExperimentIndex.name, id="1", body={"doc": {"tags": {"tag1": "val1"}}})
 
@@ -290,7 +314,8 @@ def test_set_experiment_tag(elastic_update_mock, elastic_get_mock, create_store)
 def test_set_tag(elastic_update_mock, elastic_get_mock, create_store):
     elastic_get_mock.return_value = run_response
     create_store.set_tag("1", tag)
-    elastic_get_mock.assert_called_once_with(index=RunIndex.name, id="1")
+    elastic_get_mock.assert_called_once_with(
+        index=RunIndex.name, id="1", _source=["lifecycle_stage"])
     elastic_update_mock.assert_called_once_with(
         index=RunIndex.name, id="1", body={"doc": {"tags": {"tag2": "val2"}}})
 

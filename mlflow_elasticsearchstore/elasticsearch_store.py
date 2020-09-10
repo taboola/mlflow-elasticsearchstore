@@ -1,16 +1,17 @@
 import uuid
 import math
-import re
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Any
 from elasticsearch_dsl import Search, connections, Q
 from elasticsearch import Elasticsearch
 from elasticsearch.client import IndicesClient
+from elasticsearch.exceptions import NotFoundError
 import time
 from six.moves import urllib
 
 from mlflow.store.tracking.abstract_store import AbstractStore
 from mlflow.store.tracking import SEARCH_MAX_RESULTS_THRESHOLD, SEARCH_MAX_RESULTS_DEFAULT
-from mlflow.protos.databricks_pb2 import INVALID_PARAMETER_VALUE, INVALID_STATE, INTERNAL_ERROR
+from mlflow.protos.databricks_pb2 import (INVALID_PARAMETER_VALUE, INVALID_STATE,
+                                          INTERNAL_ERROR, RESOURCE_DOES_NOT_EXIST)
 from mlflow.entities import (Experiment, RunTag, Metric, Param, Run, RunInfo, RunData,
                              RunStatus, ExperimentTag, LifecycleStage, ViewType, SourceType)
 try:
@@ -132,8 +133,13 @@ class ElasticsearchStore(AbstractStore):
                 INVALID_PARAMETER_VALUE,
             )
 
-    def _get_experiment(self, experiment_id: str) -> Dict:
-        experiment = self.es.get(index=ExperimentIndex.name, id=experiment_id)
+    def _get_experiment(self, experiment_id: str, **kwargs: Any) -> Dict:
+        try:
+            experiment = self.es.get(index=ExperimentIndex.name, id=experiment_id, **kwargs)
+        except NotFoundError:
+            raise MlflowException(
+                "No Experiment with id={} exists".format(experiment_id), RESOURCE_DOES_NOT_EXIST
+            )
         return experiment
 
     def get_experiment(self, experiment_id: str) -> Experiment:
@@ -164,7 +170,8 @@ class ElasticsearchStore(AbstractStore):
     def create_run(self, experiment_id: str, user_id: str,
                    start_time: int, tags: List[RunTag]) -> Run:
         run_id = uuid.uuid4().hex
-        experiment = self._get_experiment(experiment_id)
+        experiment = self._get_experiment(
+            experiment_id, _source=["lifecycle_stage", "artifact_location"])
         self._check_experiment_is_active(experiment)
         artifact_location = append_to_uri_path(experiment["_source"]["artifact_location"], run_id,
                                                ElasticsearchStore.ARTIFACTS_FOLDER_NAME)
@@ -207,7 +214,7 @@ class ElasticsearchStore(AbstractStore):
                                   INVALID_PARAMETER_VALUE)
 
     def update_run_info(self, run_id: str, run_status: RunStatus, end_time: int) -> RunInfo:
-        run = self._get_run(run_id)
+        run = self._get_run(run_id, _source=["lifecycle_stage"])
         self._check_run_is_active(run)
         run.update(status=RunStatus.to_string(run_status), end_time=end_time)
         body = {"doc": {"status": RunStatus.to_string(run_status), "end_time": end_time}}
@@ -217,21 +224,26 @@ class ElasticsearchStore(AbstractStore):
         return self._dict_to_mlflow_run_info(info["get"]["_source"], info["_id"])
 
     def get_run(self, run_id: str) -> Run:
-        run = self._get_run(run_id)
+        run = self._get_run(run_id, _source_excludes=["metrics"])
         return self._dict_to_mlflow_run(run, run["_id"])
 
-    def _get_run(self, run_id: str) -> Dict:
-        run = self.es.get(index=RunIndex.name, id=run_id)
+    def _get_run(self, run_id: str, **kwargs: Any) -> Dict:
+        try:
+            run = self.es.get(index=RunIndex.name, id=run_id, **kwargs)
+        except NotFoundError:
+            raise MlflowException(
+                "Run with id={} not found".format(run_id), RESOURCE_DOES_NOT_EXIST
+            )
         return run
 
     def delete_run(self, run_id: str) -> None:
-        run = self._get_run(run_id)
+        run = self._get_run(run_id, _source=["lifecycle_stage"])
         self._check_run_is_active(run)
         body = {"doc": {"lifecycle_stage": LifecycleStage.DELETED}}
         self.es.update(index=RunIndex.name, id=run_id, body=body)
 
     def restore_run(self, run_id: str) -> None:
-        run = self._get_run(run_id)
+        run = self._get_run(run_id, _source=["lifecycle_stage"])
         self._check_run_is_deleted(run)
         body = {"doc": {"lifecycle_stage": LifecycleStage.ACTIVE}}
         self.es.update(index=RunIndex.name, id=run_id, body=body)
@@ -271,7 +283,7 @@ class ElasticsearchStore(AbstractStore):
             body["script"]["source"] += f'ctx._source.metrics.{metric.key} = [params.metric];'
 
     def log_metric(self, run_id: str, metric: Metric) -> None:
-        run = self._get_run(run_id=run_id)
+        run = self._get_run(run_id=run_id, _source=["lifecycle_stage", "metrics", "latest_metrics"])
         self._check_run_is_active(run)
         body: dict = {"script": {"source": "", "params": {}}}
         self._log_metric(body, run, metric)
@@ -282,7 +294,7 @@ class ElasticsearchStore(AbstractStore):
         body["doc"]["params"][param.key] = param.value
 
     def log_param(self, run_id: str, param: Param) -> None:
-        run = self._get_run(run_id=run_id)
+        run = self._get_run(run_id=run_id, _source=["lifecycle_stage"])
         self._check_run_is_active(run)
         body: dict = {"doc": {"params": {}}}
         self._log_param(body, param)
@@ -290,7 +302,7 @@ class ElasticsearchStore(AbstractStore):
 
     def set_experiment_tag(self, experiment_id: str, tag: ExperimentTag) -> None:
         _validate_experiment_tag(tag.key, tag.value)
-        experiment = self._get_experiment(experiment_id)
+        experiment = self._get_experiment(experiment_id, _source=["lifecycle_stage"])
         self._check_experiment_is_active(experiment)
         body = {"doc": {"tags": {tag.key: tag.value}}}
         self.es.update(index=ExperimentIndex.name, id=experiment_id, body=body)
@@ -300,19 +312,18 @@ class ElasticsearchStore(AbstractStore):
         body["doc"]["tags"][tag.key] = tag.value
 
     def set_tag(self, run_id: str, tag: RunTag) -> None:
-        run = self._get_run(run_id=run_id)
+        run = self._get_run(run_id=run_id, _source=["lifecycle_stage"])
         self._check_run_is_active(run)
         body: dict = {"doc": {"tags": {}}}
         self._set_tag(body, tag)
         self.es.update(index=RunIndex.name, id=run_id, body=body)
 
-    # def get_metric_history(self, run_id: str, metric_key: str) -> List[Metric]:
-    #     response = Search(index="mlflow-runs").filter("ids", values=[run_id]) \
-    #         .filter('nested', inner_hits={"size": 100}, path="metrics",
-    #                 query=Q('term', metrics__key=metric_key)).source(False).execute()
-    #     return ([self._dict_to_mlflow_metric(m["_source"]) for m in
-    #              response["hits"]["hits"][0].inner_hits.metrics.hits.hits]
-    #             if (len(response["hits"]["hits"]) != 0) else [])
+    def get_metric_history(self, run_id: str, metric_key: str) -> List[Metric]:
+        history = self._get_run(run_id=run_id, _source=[f'metrics.{metric_key}'])
+        print("history : ", history)
+        return ([self._dict_to_mlflow_metric(metric_key, m_val) for m_val in
+                 history["_source"]["metrics"][metric_key]]
+                if "metrics" in history["_source"] else [])
 
     # def list_all_columns(self, experiment_id: str, run_view_type: str) -> 'Columns':
     #     stages = LifecycleStage.view_type_to_stages(run_view_type)
