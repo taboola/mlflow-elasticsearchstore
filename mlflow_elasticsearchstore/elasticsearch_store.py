@@ -320,7 +320,6 @@ class ElasticsearchStore(AbstractStore):
 
     def get_metric_history(self, run_id: str, metric_key: str) -> List[Metric]:
         history = self._get_run(run_id=run_id, _source=[f'metrics.{metric_key}'])
-        print("history : ", history)
         return ([self._dict_to_mlflow_metric(metric_key, m_val) for m_val in
                  history["_source"]["metrics"][metric_key]]
                 if "metrics" in history["_source"] else [])

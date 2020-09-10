@@ -412,7 +412,6 @@ def test_get_metric_history_with_fake_run_id(init_store):
 @pytest.mark.skipif(not columns_imported, reason="open source version of mlflow")
 @pytest.mark.usefixtures('init_store')
 def test_list_all_columns_all(init_store):
-    print("Columns" in sys.modules)
     expected_columns = Columns(metrics=["metric0", "metric1", "metric7"],
                                params=["param0", "param1", "param2", "param3", "param7"],
                                tags=["tag0", "tag1", "tag2", "tag3", "tag7"])
