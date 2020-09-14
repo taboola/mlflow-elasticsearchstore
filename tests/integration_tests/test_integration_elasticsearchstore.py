@@ -405,10 +405,9 @@ def test_log_batch(init_store):
 
 @pytest.mark.usefixtures('init_store')
 def test_get_metric_history(init_store):
-    expected_metric_history = [Metric(key="metric0", value=20.0, timestamp=1597324762778, step=2),
-                               Metric(key="metric0", value=15.0, timestamp=1597324762700, step=0),
-                               Metric(key="metric0", value=7.0, timestamp=1597324762742, step=1)
-                               ]
+    expected_metric_history = [Metric(key="metric0", value=15.0, timestamp=1597324762700, step=0),
+                               Metric(key="metric0", value=7.0, timestamp=1597324762742, step=1),
+                               Metric(key="metric0", value=20.0, timestamp=1597324762778, step=2)]
     actual_metric_history = init_store.get_metric_history(
         "7b2e71956f3d4c08b042624a8d83700d", "metric0")
     for i, metric in enumerate(actual_metric_history):
