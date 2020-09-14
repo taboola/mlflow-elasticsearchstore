@@ -1,6 +1,7 @@
 import pytest
 import sys
 import math
+import time
 from elasticsearch.exceptions import NotFoundError
 
 from mlflow.entities import (Experiment, ExperimentTag, Run, RunInfo, RunData,
@@ -14,7 +15,7 @@ except ImportError:
 from mlflow.exceptions import MlflowException
 
 from mlflow_elasticsearchstore.elasticsearch_store import ElasticsearchStore
-from mlflow_elasticsearchstore.models import ExperimentIndex, RunIndex
+from mlflow_elasticsearchstore.models import ExperimentIndex, RunIndex, MetricIndex
 from mlflow_elasticsearchstore.models import (ElasticExperiment, ElasticRun, ElasticExperimentTag,
                                               ElasticLatestMetric, ElasticMetric,
                                               ElasticParam, ElasticTag)
@@ -261,9 +262,13 @@ def test_log_metric(init_store):
     new_metric = Metric(key="new_metric", value=7.0, timestamp=10, step=0)
     init_store.log_metric("7b2e71956f3d4c08b042624a8d83700d", new_metric)
     actual_run = init_store._get_run("7b2e71956f3d4c08b042624a8d83700d")
-    assert "new_metric" in actual_run["_source"]["metrics"]
-    assert {"value": 7.0, "timestamp": 10, "step": 0,
-            "is_nan": False} in actual_run["_source"]["metrics"]["new_metric"]
+    time.sleep(1)
+    metrics = [m["_source"] for m in init_store.es.search(
+        index=MetricIndex.name, body={"query": {"bool": {"filter": []}}},
+        size=1000)["hits"]["hits"]]
+    assert "new_metric" in actual_run["_source"]["metric_keys"]
+    assert {"key": "new_metric", "value": 7.0, "timestamp": 10, "step": 0,
+            "is_nan": False, "run_id": "7b2e71956f3d4c08b042624a8d83700d"} in metrics
     assert "new_metric" in actual_run["_source"]["latest_metrics"]
     assert actual_run["_source"]["latest_metrics"]["new_metric"] == {
         "value": 7.0, "timestamp": 10, "step": 0, "is_nan": False}
@@ -274,9 +279,13 @@ def test_log_metric_with_nan_value(init_store):
     new_metric = Metric(key="nan_metric", value=math.nan, timestamp=10, step=0)
     init_store.log_metric("7b2e71956f3d4c08b042624a8d83700d", new_metric)
     actual_run = init_store._get_run("7b2e71956f3d4c08b042624a8d83700d")
-    assert "nan_metric" in actual_run["_source"]["metrics"]
-    assert {"value": 0, "timestamp": 10, "step": 0,
-            "is_nan": True} in actual_run["_source"]["metrics"]["nan_metric"]
+    time.sleep(1)
+    metrics = [m["_source"] for m in init_store.es.search(
+        index=MetricIndex.name, body={"query": {"bool": {"filter": []}}},
+        size=1000)["hits"]["hits"]]
+    assert "nan_metric" in actual_run["_source"]["metric_keys"]
+    assert {"key": "nan_metric", "value": 0, "timestamp": 10, "step": 0,
+            "is_nan": True, "run_id": "7b2e71956f3d4c08b042624a8d83700d"} in metrics
     assert "nan_metric" in actual_run["_source"]["latest_metrics"]
     assert actual_run["_source"]["latest_metrics"]["nan_metric"] == {
         "value": 0, "timestamp": 10, "step": 0, "is_nan": True}
@@ -287,9 +296,13 @@ def test_log_metric_with_inf_value(init_store):
     new_metric = Metric(key="inf_metric", value=1.7976931348623157e309, timestamp=10, step=0)
     init_store.log_metric("7b2e71956f3d4c08b042624a8d83700d", new_metric)
     actual_run = init_store._get_run("7b2e71956f3d4c08b042624a8d83700d")
-    assert "inf_metric" in actual_run["_source"]["metrics"]
-    assert {"value": 1.7976931348623157e308, "timestamp": 10, "step": 0,
-            "is_nan": False} in actual_run["_source"]["metrics"]["inf_metric"]
+    time.sleep(1)
+    metrics = [m["_source"] for m in init_store.es.search(
+        index=MetricIndex.name, body={"query": {"bool": {"filter": []}}},
+        size=1000)["hits"]["hits"]]
+    assert "inf_metric" in actual_run["_source"]["metric_keys"]
+    assert {"key": "inf_metric", "value": 1.7976931348623157e308, "timestamp": 10, "step": 0,
+            "is_nan": False, "run_id": "7b2e71956f3d4c08b042624a8d83700d"} in metrics
     assert "inf_metric" in actual_run["_source"]["latest_metrics"]
     assert actual_run["_source"]["latest_metrics"]["inf_metric"] == {
         "value": 1.7976931348623157e308, "timestamp": 10, "step": 0, "is_nan": False}
@@ -301,9 +314,13 @@ def test_log_metric_with_negative_inf_value(init_store):
                         value=-1.7976931348623157e309, timestamp=10, step=0)
     init_store.log_metric("7b2e71956f3d4c08b042624a8d83700d", new_metric)
     actual_run = init_store._get_run("7b2e71956f3d4c08b042624a8d83700d")
-    assert "negative_inf_metric" in actual_run["_source"]["metrics"]
-    assert {"value": -1.7976931348623157e308, "timestamp": 10, "step": 0,
-            "is_nan": False} in actual_run["_source"]["metrics"]["negative_inf_metric"]
+    time.sleep(1)
+    metrics = [m["_source"] for m in init_store.es.search(
+        index=MetricIndex.name, body={"query": {"bool": {"filter": []}}},
+        size=1000)["hits"]["hits"]]
+    assert "negative_inf_metric" in actual_run["_source"]["metric_keys"]
+    assert {"key": "negative_inf_metric", "value": -1.7976931348623157e308, "timestamp": 10,
+            "step": 0, "is_nan": False, "run_id": "7b2e71956f3d4c08b042624a8d83700d"} in metrics
     assert "negative_inf_metric" in actual_run["_source"]["latest_metrics"]
     assert actual_run["_source"]["latest_metrics"]["negative_inf_metric"] == {
         "value": -1.7976931348623157e308, "timestamp": 10, "step": 0, "is_nan": False}
@@ -314,9 +331,13 @@ def test_log_metric_with_existing_key(init_store):
     new_metric = Metric(key="new_metric", value=-10, timestamp=20, step=1)
     init_store.log_metric("7b2e71956f3d4c08b042624a8d83700d", new_metric)
     actual_run = init_store._get_run("7b2e71956f3d4c08b042624a8d83700d")
-    assert "new_metric" in actual_run["_source"]["metrics"]
-    assert {"value": -10, "timestamp": 20, "step": 1,
-            "is_nan": False} in actual_run["_source"]["metrics"]["new_metric"]
+    time.sleep(1)
+    metrics = [m["_source"] for m in init_store.es.search(
+        index=MetricIndex.name, body={"query": {"bool": {"filter": []}}},
+        size=1000)["hits"]["hits"]]
+    assert "new_metric" in actual_run["_source"]["metric_keys"]
+    assert {"key": "new_metric", "value": -10, "timestamp": 20, "step": 1,
+            "is_nan": False, "run_id": "7b2e71956f3d4c08b042624a8d83700d"} in metrics
     assert "new_metric" in actual_run["_source"]["latest_metrics"]
     assert actual_run["_source"]["latest_metrics"]["new_metric"] == {
         "value": -10, "timestamp": 20, "step": 1, "is_nan": False}
@@ -384,9 +405,10 @@ def test_log_batch(init_store):
 
 @pytest.mark.usefixtures('init_store')
 def test_get_metric_history(init_store):
-    expected_metric_history = [Metric(key="metric0", value=15.0, timestamp=1597324762700, step=0),
-                               Metric(key="metric0", value=7.0, timestamp=1597324762742, step=1),
-                               Metric(key="metric0", value=20.0, timestamp=1597324762778, step=2)]
+    expected_metric_history = [Metric(key="metric0", value=20.0, timestamp=1597324762778, step=2),
+                               Metric(key="metric0", value=15.0, timestamp=1597324762700, step=0),
+                               Metric(key="metric0", value=7.0, timestamp=1597324762742, step=1)
+                               ]
     actual_metric_history = init_store.get_metric_history(
         "7b2e71956f3d4c08b042624a8d83700d", "metric0")
     for i, metric in enumerate(actual_metric_history):
@@ -403,12 +425,11 @@ def test_get_metric_history_with_fake_key(init_store):
 
 @pytest.mark.usefixtures('init_store')
 def test_get_metric_history_with_fake_run_id(init_store):
-    with pytest.raises(MlflowException) as excinfo:
-        init_store.get_metric_history("fake_run_id", "metric0")
-        assert "Run with id=fake_run_id not found" in str(excinfo.value)
+    expected_metric_history = []
+    actual_metric_history = init_store.get_metric_history("fake_run_id", "metric0")
+    assert actual_metric_history == expected_metric_history
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.skipif(not columns_imported, reason="open source version of mlflow")
 @pytest.mark.usefixtures('init_store')
 def test_list_all_columns_all(init_store):
@@ -419,7 +440,6 @@ def test_list_all_columns_all(init_store):
     assert expected_columns.__dict__ == actual_columns.__dict__
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.skipif(not columns_imported, reason="open source version of mlflow")
 @pytest.mark.usefixtures('init_store')
 def test_list_all_columns_active(init_store):
@@ -430,7 +450,6 @@ def test_list_all_columns_active(init_store):
     assert expected_columns.__dict__ == actual_columns.__dict__
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.skipif(not columns_imported, reason="open source version of mlflow")
 @pytest.mark.usefixtures('init_store')
 def test_list_all_columns_deleted(init_store):
@@ -441,7 +460,6 @@ def test_list_all_columns_deleted(init_store):
     assert expected_columns.__dict__ == actual_columns.__dict__
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.skipif(not columns_imported, reason="open source version of mlflow")
 @pytest.mark.usefixtures('init_store')
 def test_list_all_columns_with_fake_experiment_id(init_store):

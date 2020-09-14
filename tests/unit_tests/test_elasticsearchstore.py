@@ -37,10 +37,11 @@ run_response = {'_index': 'mlflow-runs', '_type': '_doc', '_id': '1',
                             'lifecycle_stage': 'active', 'artifact_uri': 'artifact_location',
                             'latest_metrics': {'metric1': {'value': 1, 'timestamp': 1,
                                                            'step': 1, 'is_nan': False}},
-                            'metrics': {'metric1': [{'value': 1, 'timestamp': 1,
-                                                     'step': 1, 'is_nan': False}]},
                             'params': {'param1': 'val1'},
-                            'tags': {'tag1': 'val1'}}}
+                            'tags': {'tag1': 'val1'},
+                            'metric_keys': ['metric1'],
+                            'param_keys': ['param1'],
+                            'tag_keys': ['tag1']}}
 
 deleted_run_response = {'_index': 'mlflow-runs', '_type': '_doc', '_id': '1',
                         '_version': 1, '_seq_no': 0, '_primary_term': 1, 'found': True,
@@ -50,10 +51,11 @@ deleted_run_response = {'_index': 'mlflow-runs', '_type': '_doc', '_id': '1',
                                     'artifact_uri': 'artifact_location',
                                     'latest_metrics': {'metric1': {'value': 1, 'timestamp': 1,
                                                                    'step': 1, 'is_nan': False}},
-                                    'metrics': {'metric1': [{'value': 1, 'timestamp': 1,
-                                                             'step': 1, 'is_nan': False}]},
                                     'params': {'param1': 'val1'},
-                                    'tags': {'tag1': 'val1'}}}
+                                    'tags': {'tag1': 'val1'}, 'metric_keys': ['metric1'],
+                                    'param_keys': ['param1'],
+                                    'tag_keys': ['tag1']}
+                        }
 run = ElasticRun(meta={'id': "1"},
                  experiment_id="experiment_id", user_id="user_id",
                  status=RunStatus.to_string(RunStatus.RUNNING),
@@ -249,51 +251,47 @@ def test_get_run(elastic_get_mock, create_store):
     expected_run = create_store._dict_to_mlflow_run(run_response, run_response["_id"])
     real_run = create_store.get_run("1")
     elastic_get_mock.assert_called_once_with(
-        index=RunIndex.name, id="1", _source_excludes=["metrics"])
+        index=RunIndex.name, id="1", _source_excludes=['metric_keys', 'param_keys', 'tag_keys'])
     assert expected_run._info == real_run._info
     assert expected_run._data._metrics == real_run._data._metrics
     assert expected_run._data._params == real_run._data._params
     assert expected_run._data._tags == real_run._data._tags
 
 
-@pytest.mark.parametrize("test_metric,test_body",
+@pytest.mark.parametrize("test_metric,test_actions",
                          [(Metric(key="metric1", value=2, timestamp=1, step=2,),
-                           {"script": {"source": 'ctx._source.latest_metrics.metric1 '
-                                       '= params.metric; '
-                                       'ctx._source.metrics.metric1.add(params.metric);',
-                                       "params": {"metric": {"value": 2,
-                                                             "timestamp": 1,
-                                                             "step": 2,
-                                                             "is_nan": False}}}}),
+                           '{"create":{"_index":"mlflow-metrics"}}\n'
+                           '{"key":"metric1","value":2,"timestamp":1,"step":2,'
+                           '"is_nan":false,"run_id":"1"}\n'),
                           (Metric(key="metric2", value=2, timestamp=1, step=1),
-                           {"script": {"source": 'ctx._source.latest_metrics.metric2 '
-                                       '= params.metric; '
-                                       'ctx._source.metrics.metric2 = [params.metric];',
-                                       "params": {"metric": {"value": 2,
-                                                             "timestamp": 1,
-                                                             "step": 1,
-                                                             "is_nan": False}}}})])
+                           '{"create":{"_index":"mlflow-metrics"}}\n'
+                           '{"key":"metric2","value":2,"timestamp":1,"step":1,'
+                           '"is_nan":false,"run_id":"1"}\n')])
 @mock.patch('elasticsearch.Elasticsearch.get')
-@mock.patch('elasticsearch.Elasticsearch.update')
+@mock.patch('elasticsearch.Elasticsearch.bulk')
 @pytest.mark.usefixtures('create_store')
-def test_log_metric(elastic_update_mock, elastic_get_mock, test_metric, test_body, create_store):
+def test_log_metric(elastic_bulk_mock, elastic_get_mock, test_metric, test_actions, create_store):
+    create_store._update_latest_metric_if_necessary = mock.MagicMock()
     elastic_get_mock.return_value = run_response
     create_store.log_metric("1", test_metric)
     elastic_get_mock.assert_called_once_with(index=RunIndex.name, id="1", _source=[
-                                             "lifecycle_stage", "metrics", "latest_metrics"])
-    elastic_update_mock.assert_called_once_with(index=RunIndex.name, id="1", body=test_body)
+                                             "lifecycle_stage", "latest_metrics", "metric_keys"])
+    elastic_bulk_mock.assert_called_once_with(test_actions)
 
 
 @mock.patch('elasticsearch.Elasticsearch.get')
-@mock.patch('elasticsearch.Elasticsearch.update')
+@mock.patch('elasticsearch.Elasticsearch.bulk')
 @pytest.mark.usefixtures('create_store')
-def test_log_param(elastic_update_mock, elastic_get_mock, create_store):
+def test_log_param(elastic_bulk_mock, elastic_get_mock, create_store):
     elastic_get_mock.return_value = run_response
     create_store.log_param("1", param)
+    actions = '{"update":{"_id":"1","_index":"mlflow-runs"}}\n' \
+        '{"script":{"source":"ctx._source.params[params.key] = params.value; ' \
+        'if (!ctx._source.param_keys.contains(params.key)) ' \
+        '{ ctx._source.param_keys.add(params.key) }","params":{"value":"val2","key":"param2"}}}\n'
     elastic_get_mock.assert_called_once_with(
         index=RunIndex.name, id="1", _source=["lifecycle_stage"])
-    elastic_update_mock.assert_called_once_with(
-        index=RunIndex.name, id="1", body={"doc": {"params": {"param2": "val2"}}})
+    elastic_bulk_mock.assert_called_once_with(actions)
 
 
 @mock.patch('elasticsearch.Elasticsearch.get')
@@ -309,33 +307,51 @@ def test_set_experiment_tag(elastic_update_mock, elastic_get_mock, create_store)
 
 
 @mock.patch('elasticsearch.Elasticsearch.get')
-@mock.patch('elasticsearch.Elasticsearch.update')
+@mock.patch('elasticsearch.Elasticsearch.bulk')
 @pytest.mark.usefixtures('create_store')
-def test_set_tag(elastic_update_mock, elastic_get_mock, create_store):
+def test_set_tag(elastic_bulk_mock, elastic_get_mock, create_store):
     elastic_get_mock.return_value = run_response
     create_store.set_tag("1", tag)
+    actions = '{"update":{"_id":"1","_index":"mlflow-runs"}}\n' \
+        '{"script":{"source":"ctx._source.tags[params.key] = params.value; ' \
+        'if (!ctx._source.tag_keys.contains(params.key)) ' \
+        '{ ctx._source.tag_keys.add(params.key) }","params":{"value":"val2","key":"tag2"}}}\n'
     elastic_get_mock.assert_called_once_with(
         index=RunIndex.name, id="1", _source=["lifecycle_stage"])
-    elastic_update_mock.assert_called_once_with(
-        index=RunIndex.name, id="1", body={"doc": {"tags": {"tag2": "val2"}}})
+    elastic_bulk_mock.assert_called_once_with(actions)
 
 
-@pytest.mark.parametrize("test_metric,test_body",
-                         [(Metric(key="metric1", value=2, timestamp=1, step=2,),
-                           {"script": {"source": 'ctx._source.latest_metrics.metric1 '
-                                       '= params.metric; ',
-                                       "params": {}}}),
-                          (Metric(key="metric1", value=2, timestamp=0, step=0,),
-                           {"script": {"source": "", "params": {}}}),
-                          (Metric(key="metric2", value=2, timestamp=1, step=1),
-                           {"script": {"source": 'ctx._source.latest_metrics.metric2 '
-                                       '= params.metric; ',
-                                       "params": {}}})])
+@pytest.mark.parametrize("test_metric,test_key,test_actions",
+                         [({"value": 2, "timestamp": 1, "step": 2, "is_nan": False},
+                           "metric1",
+                           [{"_op_type": "update",
+                             "_index": RunIndex.name,
+                             "_id": "1",
+                             "script":
+                             {"source":
+                                 'ctx._source.latest_metrics[params.key] = params.metric; ',
+                                 "params": {"metric": {"value": 2, "timestamp": 1,
+
+                                                       "step": 2, "is_nan": False},
+                                            "key": "metric1"}}}]),
+                          ({"value": 2, "timestamp": 0, "step": 0, "is_nan": False},
+                           "metric1",
+                           []),
+                          ({"value": 2, "timestamp": 1, "step": 1, "is_nan": False},
+                           "metric2",
+                           [{"_op_type": "update",
+                             "_index": RunIndex.name,
+                             "_id": "1",
+                             "script": {"source": 'ctx._source.metric_keys.add(params.key); '
+                                        'ctx._source.latest_metrics[params.key] = params.metric; ',
+                                        "params": {"metric": {"value": 2, "timestamp": 1,
+                                                              "step": 1, "is_nan": False},
+                                                   "key": "metric2"}}}])])
 @pytest.mark.usefixtures('create_store')
-def test__update_latest_metric_if_necessary(test_metric, test_body, create_store):
-    body = {"script": {"source": "", "params": {}}}
-    create_store._update_latest_metric_if_necessary(body, test_metric, run_response)
-    assert body == test_body
+def test__update_latest_metric_if_necessary(test_metric, test_actions, test_key, create_store):
+    actions = []
+    create_store._update_latest_metric_if_necessary(actions, test_metric, test_key, run_response)
+    assert actions == test_actions
 
 
 @pytest.mark.skip(reason="no way of currently testing this")

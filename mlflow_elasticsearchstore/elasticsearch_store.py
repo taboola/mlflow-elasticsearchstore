@@ -4,6 +4,7 @@ from typing import List, Tuple, Dict, Any
 from elasticsearch_dsl import Search, connections, Q
 from elasticsearch import Elasticsearch
 from elasticsearch.client import IndicesClient
+from elasticsearch.helpers import bulk
 from elasticsearch.exceptions import NotFoundError
 import time
 from six.moves import urllib
@@ -31,7 +32,7 @@ from mlflow.utils.validation import (
     _validate_tag,
 )
 
-from mlflow_elasticsearchstore.models import ExperimentIndex, RunIndex
+from mlflow_elasticsearchstore.models import ExperimentIndex, RunIndex, MetricIndex
 from mlflow_elasticsearchstore.models import (ElasticExperiment, ElasticRun, ElasticExperimentTag,
                                               ElasticLatestMetric, ElasticMetric,
                                               ElasticParam, ElasticTag)
@@ -59,6 +60,7 @@ class ElasticsearchStore(AbstractStore):
         self.indices = IndicesClient(self.es)
         ExperimentIndex.init(indices=self.indices)
         RunIndex.init(indices=self.indices)
+        MetricIndex.init(indices=self.indices)
         super(ElasticsearchStore, self).__init__()
 
     def _dict_to_mlflow_experiment(self, exp_dict: Dict, _id: str) -> Experiment:
@@ -90,8 +92,8 @@ class ElasticsearchStore(AbstractStore):
                              (data_dict["tags"].items() if 'tags' in data_dict else[])])
 
     def _dict_to_mlflow_metric(self, m_key: str, m_val: Dict) -> Metric:
-        return Metric(key=m_key, value=m_val["value"], timestamp=m_val["timestamp"],
-                      step=m_val["step"])
+        return Metric(key=m_key, value=m_val["value"] if not m_val["is_nan"] else float("nan"),
+                      timestamp=m_val["timestamp"], step=m_val["step"])
 
     def _dict_to_mlflow_param(self, p_key: str, p_val: str) -> Param:
         return Param(key=p_key, value=p_val)
@@ -224,7 +226,7 @@ class ElasticsearchStore(AbstractStore):
         return self._dict_to_mlflow_run_info(info["get"]["_source"], info["_id"])
 
     def get_run(self, run_id: str) -> Run:
-        run = self._get_run(run_id, _source_excludes=["metrics"])
+        run = self._get_run(run_id, _source_excludes=["metric_keys", "param_keys", "tag_keys"])
         return self._dict_to_mlflow_run(run, run["_id"])
 
     def _get_run(self, run_id: str, **kwargs: Any) -> Dict:
@@ -249,21 +251,32 @@ class ElasticsearchStore(AbstractStore):
         self.es.update(index=RunIndex.name, id=run_id, body=body)
 
     @staticmethod
-    def _update_latest_metric_if_necessary(body: Dict, metric: Metric, run: Dict) -> None:
+    def _update_latest_metric_if_necessary(actions: List, new_metric: Dict,
+                                           new_metric_key: str, run: Dict) -> None:
         def _compare_metrics(metric_a: Dict,
                              metric_b: Dict) -> bool:
             return (metric_a["step"], metric_a["timestamp"], metric_a["value"]) > \
                    (metric_b["step"], metric_b["timestamp"], metric_b["value"])
-        update_latest_metric = False
-        if metric.key in run["_source"]["latest_metrics"]:
-            if _compare_metrics(dict(metric), run["_source"]["latest_metrics"][metric.key]):
-                update_latest_metric = True
+        if new_metric_key in run["_source"]["metric_keys"]:
+            if _compare_metrics(new_metric, run["_source"]["latest_metrics"][new_metric_key]):
+                actions.append({"_op_type": "update",
+                                "_index": RunIndex.name,
+                                "_id": run["_id"],
+                                "script":
+                                {"source":
+                                 'ctx._source.latest_metrics[params.key] = params.metric; ',
+                                 "params": {"metric": new_metric,
+                                            "key": new_metric_key}}})
         else:
-            update_latest_metric = True
-        if update_latest_metric:
-            body["script"]["source"] = f'ctx._source.latest_metrics.{metric.key} = params.metric; '
+            actions.append({"_op_type": "update",
+                            "_index": RunIndex.name,
+                            "_id": run["_id"],
+                            "script": {"source": 'ctx._source.metric_keys.add(params.key); '
+                                       'ctx._source.latest_metrics[params.key] = params.metric; ',
+                                       "params": {"metric": new_metric,
+                                                  "key": new_metric_key}}})
 
-    def _log_metric(self, body: Dict, run: Dict, metric: Metric) -> None:
+    def _log_metric(self, actions: List, run: Dict, metric: Metric) -> None:
         _validate_metric(metric.key, metric.value, metric.timestamp, metric.step)
         is_nan = math.isnan(metric.value)
         if is_nan:
@@ -272,33 +285,47 @@ class ElasticsearchStore(AbstractStore):
             value = 1.7976931348623157e308 if metric.value > 0 else -1.7976931348623157e308
         else:
             value = metric.value
-        self._update_latest_metric_if_necessary(body, metric, run)
-        body["script"]["params"]["metric"] = {"value": value,
-                                              "timestamp": metric.timestamp,
-                                              "step": metric.step,
-                                              "is_nan": is_nan}
-        if metric.key in run["_source"]["metrics"]:
-            body["script"]["source"] += f'ctx._source.metrics.{metric.key}.add(params.metric);'
-        else:
-            body["script"]["source"] += f'ctx._source.metrics.{metric.key} = [params.metric];'
+        new_metric = {"key": metric.key,
+                      "value": value,
+                      "timestamp": metric.timestamp,
+                      "step": metric.step,
+                      "is_nan": is_nan,
+                      "run_id": run["_id"]}
+        new_latest_metric = {"value": value,
+                             "timestamp": metric.timestamp,
+                             "step": metric.step,
+                             "is_nan": is_nan}
+        self._update_latest_metric_if_necessary(actions, new_latest_metric, metric.key, run)
+        actions.append({"_op_type": "create",
+                        "_index": MetricIndex.name,
+                        "_source": new_metric})
 
     def log_metric(self, run_id: str, metric: Metric) -> None:
-        run = self._get_run(run_id=run_id, _source=["lifecycle_stage", "metrics", "latest_metrics"])
+        run = self._get_run(run_id=run_id, _source=[
+                            "lifecycle_stage", "latest_metrics", "metric_keys"])
         self._check_run_is_active(run)
-        body: dict = {"script": {"source": "", "params": {}}}
-        self._log_metric(body, run, metric)
-        self.es.update(index=RunIndex.name, id=run_id, body=body)
+        actions: List[str] = []
+        self._log_metric(actions, run, metric)
+        bulk(client=self.es, actions=actions)
 
-    def _log_param(self, body: Dict, param: Param) -> None:
+    def _log_param(self, actions: List, param: Param, run_id: str) -> None:
         _validate_param(param.key, param.value)
-        body["doc"]["params"][param.key] = param.value
+        actions.append({"_op_type": "update",
+                        "_index": RunIndex.name,
+                        "_id": run_id,
+                        "script": {"source":
+                                   'ctx._source.params[params.key] = params.value; '
+                                   'if (!ctx._source.param_keys.contains(params.key)) '
+                                   '{ ctx._source.param_keys.add(params.key) }',
+                                   "params": {"value": param.value,
+                                              "key": param.key}}})
 
     def log_param(self, run_id: str, param: Param) -> None:
         run = self._get_run(run_id=run_id, _source=["lifecycle_stage"])
         self._check_run_is_active(run)
-        body: dict = {"doc": {"params": {}}}
-        self._log_param(body, param)
-        self.es.update(index=RunIndex.name, id=run_id, body=body)
+        actions: List[str] = []
+        self._log_param(actions, param, run_id)
+        bulk(client=self.es, actions=actions)
 
     def set_experiment_tag(self, experiment_id: str, tag: ExperimentTag) -> None:
         _validate_experiment_tag(tag.key, tag.value)
@@ -307,36 +334,71 @@ class ElasticsearchStore(AbstractStore):
         body = {"doc": {"tags": {tag.key: tag.value}}}
         self.es.update(index=ExperimentIndex.name, id=experiment_id, body=body)
 
-    def _set_tag(self, body: Dict, tag: RunTag) -> None:
+    def _set_tag(self, actions: List, tag: RunTag, run_id: str) -> None:
         _validate_tag(tag.key, tag.value)
-        body["doc"]["tags"][tag.key] = tag.value
+        actions.append({"_op_type": "update",
+                        "_index": RunIndex.name,
+                        "_id": run_id,
+                        "script": {"source":
+                                   'ctx._source.tags[params.key] = params.value; '
+                                   'if (!ctx._source.tag_keys.contains(params.key)) '
+                                   '{ ctx._source.tag_keys.add(params.key) }',
+                                   "params": {"value": tag.value,
+                                              "key": tag.key}}})
 
     def set_tag(self, run_id: str, tag: RunTag) -> None:
         run = self._get_run(run_id=run_id, _source=["lifecycle_stage"])
         self._check_run_is_active(run)
-        body: dict = {"doc": {"tags": {}}}
-        self._set_tag(body, tag)
-        self.es.update(index=RunIndex.name, id=run_id, body=body)
+        actions: List[str] = []
+        self._set_tag(actions, tag, run_id)
+        bulk(client=self.es, actions=actions)
 
     def get_metric_history(self, run_id: str, metric_key: str) -> List[Metric]:
-        history = self._get_run(run_id=run_id, _source=[f'metrics.{metric_key}'])
-        return ([self._dict_to_mlflow_metric(metric_key, m_val) for m_val in
-                 history["_source"]["metrics"][metric_key]]
-                if "metrics" in history["_source"] else [])
+        body = {"query": {"bool": {"filter": [
+            {"term": {"run_id": run_id}},
+            {"term": {"key": metric_key}}]}}}
+        history = self.es.search(index=MetricIndex.name, body=body, _source=[
+                                 "value", "timestamp", "step", "is_nan"])
+        return ([self._dict_to_mlflow_metric(metric_key, m_val["_source"]) for m_val in
+                 history["hits"]["hits"]])
 
-    # def list_all_columns(self, experiment_id: str, run_view_type: str) -> 'Columns':
-    #     stages = LifecycleStage.view_type_to_stages(run_view_type)
-    #     s = Search(index="mlflow-runs").filter("match", experiment_id=experiment_id) \
-    #         .filter("terms", lifecycle_stage=stages)
-    #     for col in ['latest_metrics', 'params', 'tags']:
-    #         s.aggs.bucket(col, 'nested', path=col)\
-    #             .bucket(f'{col}_keys', "terms", field=f'{col}.key')
-    #     response = s.execute()
-    #     metrics = [m.key for m in
-    #                response.aggregations.latest_metrics.latest_metrics_keys.buckets]
-    #     params = [p.key for p in response.aggregations.params.params_keys.buckets]
-    #     tags = [t.key for t in response.aggregations.tags.tags_keys.buckets]
-    #     return Columns(metrics=metrics, params=params, tags=tags)
+    def _list_columns(self, experiment_id: str, stages: List[LifecycleStage],
+                      column_type: str, columns: List[str], size: int = 100) -> None:
+        body = {"query": {"bool": {"filter": [
+            {"term": {"experiment_id": experiment_id}},
+            {"terms": {"lifecycle_stage": stages}}]}},
+            "aggs":  {"my_buckets": {"composite": {
+                "sources": [{column_type: {"terms": {"field": f"{column_type}_keys"}}}],
+                "size": 100}}}}
+        response = self.es.search(index=RunIndex.name, body=body, _source=False)
+        new_columns = [column["key"][column_type] for column in
+                       response["aggregations"]["my_buckets"]["buckets"]]
+        columns += new_columns
+        while (len(new_columns) == size):
+            last_col = response["aggregations"]["my_buckets"]["after_key"][column_type]
+            body = {"query": {"bool": {"filter": [
+                {"term": {"experiment_id": experiment_id}},
+                {"terms": {"lifecycle_stage": stages}}]}},
+                "aggs": {"my_buckets": {"composite": {
+                    "sources": [{column_type: {"terms": {"field": f"{column_type}_keys"}}}],
+                    "size": 100,
+                    "after": {column_type: last_col}}}}}
+            response = self.es.search(index=RunIndex.name, body=body, _source=False)
+            new_columns = [column["key"][column_type] for column in
+                           response["aggregations"]["my_buckets"]["buckets"]]
+            columns += new_columns
+
+    def list_all_columns(self, experiment_id: str, run_view_type: str) -> 'Columns':
+        columns: Dict[str, List[str]] = {"metric": [],
+                                         "param": [],
+                                         "tag": []}
+        stages = LifecycleStage.view_type_to_stages(run_view_type)
+        for column_type in ['metric', 'param', 'tag']:
+            self._list_columns(experiment_id, stages, column_type,
+                               columns[column_type])
+        return Columns(metrics=columns['metric'],
+                       params=columns['param'],
+                       tags=columns['tag'])
 
     # def _build_elasticsearch_query(self, parsed_filters: List[dict], s: Search) -> Search:
     #     type_dict = {"metric": "latest_metrics", "parameter": "params", "tag": "tags"}

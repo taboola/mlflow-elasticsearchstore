@@ -176,9 +176,36 @@ class RunIndex():
             "lifecycle_stage": {"type": "keyword"},
             "artifact_location": {"type": "text"},
             "latest_metrics": {"type": "flattened"},
-            "metrics": {"type": "flattened"},
             "params": {"type": "flattened"},
-            "tags": {"type": "flattened"}
+            "tags": {"type": "flattened"},
+            "metric_keys": {"type": "keyword"},
+            "param_keys": {"type": "keyword"},
+            "tag_keys": {"type": "keyword"}
+        }
+    }
+
+    @classmethod
+    def init(cls, indices: IndicesClient) -> None:
+        if not (indices.exists(index=[cls.name])):
+            indices.create(index=cls.name,
+                           body={"settings": cls.settings,
+                                 "mappings": cls.mappings})
+
+
+class MetricIndex():
+    name = "mlflow-metrics"
+    settings = {
+        "number_of_shards": 2,
+        "number_of_replicas": 3
+    }
+    mappings = {
+        "properties": {
+            "key": {"type": "keyword"},
+            "value": {"type": "double"},
+            "timestamp": {"type": "long", "index": "false"},
+            "step": {"type": "long", "index": "false"},
+            "is_nan": {"type": "boolean", "index": "false"},
+            "run_id": {"type": "keyword"}
         }
     }
 

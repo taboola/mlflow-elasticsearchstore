@@ -6,7 +6,7 @@ from elasticsearch.client import IndicesClient
 from mlflow.tracking import MlflowClient
 
 from mlflow_elasticsearchstore.elasticsearch_store import ElasticsearchStore
-from mlflow_elasticsearchstore.models import ExperimentIndex, RunIndex
+from mlflow_elasticsearchstore.models import ExperimentIndex, RunIndex, MetricIndex
 
 
 @pytest.fixture
@@ -14,6 +14,7 @@ def create_store():
     IndicesClient.create = mock.MagicMock()
     ExperimentIndex.init = mock.MagicMock()
     RunIndex.init = mock.MagicMock()
+    MetricIndex.init = mock.MagicMock()
     store = ElasticsearchStore("elasticsearch://store_uri", "artifact_uri")
     return store
 
