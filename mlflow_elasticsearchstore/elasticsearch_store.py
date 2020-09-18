@@ -3,7 +3,6 @@ import math
 from operator import attrgetter
 from typing import List, Tuple, Any, Dict
 from elasticsearch_dsl import Search, connections, Q
-import time
 from six.moves import urllib
 
 from mlflow.store.tracking.abstract_store import AbstractStore
@@ -60,9 +59,9 @@ class ElasticsearchStore(AbstractStore):
                           artifact_location=hit.artifact_location,
                           lifecycle_stage=hit.lifecycle_stage)
 
-    def _hit_to_mlflow_run(self, hit: Any) -> Run:
+    def _hit_to_mlflow_run(self, hit: Any, columns_to_whitelist_key_dict: dict = None) -> Run:
         return Run(run_info=self._hit_to_mlflow_run_info(hit),
-                   run_data=self._hit_to_mlflow_run_data(hit))
+                   run_data=self._hit_to_mlflow_run_data(hit, columns_to_whitelist_key_dict))
 
     def _hit_to_mlflow_run_info(self, hit: Any) -> RunInfo:
         return RunInfo(run_uuid=hit.meta.id, run_id=hit.meta.id,
@@ -71,15 +70,25 @@ class ElasticsearchStore(AbstractStore):
                        status=hit.status,
                        start_time=hit.start_time,
                        end_time=hit.end_time if hasattr(hit, 'end_time') else None,
-                       lifecycle_stage=hit.lifecycle_stage, artifact_uri=hit.artifact_uri)
+                       lifecycle_stage=hit.lifecycle_stage if
+                       hasattr(hit, 'lifecycle_stage') else None,
+                       artifact_uri=hit.artifact_uri
+                       if hasattr(hit, 'artifact_uri') else None)
 
-    def _hit_to_mlflow_run_data(self, hit: Any) -> RunData:
-        return RunData(metrics=[self._hit_to_mlflow_metric(m) for m in
-                                (hit.latest_metrics if hasattr(hit, 'latest_metrics') else [])],
-                       params=[self._hit_to_mlflow_param(p) for p in
-                               (hit.params if hasattr(hit, 'params') else [])],
-                       tags=[self._hit_to_mlflow_tag(t) for t in
-                             (hit.tags if hasattr(hit, 'tags') else[])])
+    def _hit_to_mlflow_run_data(self, hit: Any, columns_to_whitelist_key_dict: dict) -> RunData:
+        metrics = [self._hit_to_mlflow_metric(m) for m in
+                   (hit.latest_metrics if hasattr(hit, 'latest_metrics') else[])
+                   if (columns_to_whitelist_key_dict is None or
+                       m.key in columns_to_whitelist_key_dict["metrics"])]
+        params = [self._hit_to_mlflow_param(p) for p in
+                  (hit.params if hasattr(hit, 'params') else[])
+                  if (columns_to_whitelist_key_dict is None or
+                      p.key in columns_to_whitelist_key_dict["params"])]
+        tags = [self._hit_to_mlflow_tag(t) for t in
+                (hit.tags if hasattr(hit, 'tags') else[])
+                if (columns_to_whitelist_key_dict is None or
+                    t.key in columns_to_whitelist_key_dict["tags"])]
+        return RunData(metrics=metrics, params=params, tags=tags)
 
     def _hit_to_mlflow_metric(self, hit: Any) -> Metric:
         return Metric(key=hit.key, value=hit.value, timestamp=hit.timestamp,
@@ -323,8 +332,19 @@ class ElasticsearchStore(AbstractStore):
                        params=columns['params'],
                        tags=columns['tags'])
 
-    def _build_elasticsearch_query(self, parsed_filters: List[dict], s: Search) -> Search:
+    def _build_columns_to_whitelist_key_dict(self, columns_to_whitelist: List[str]) -> dict:
+        if columns_to_whitelist is None:
+            return None
+        columns_to_whitelist_key_dict: dict = {"metrics": set(), "params": set(), "tags": set()}
+        for col in columns_to_whitelist:
+            word = col.split(".")
+            key = ".".join(word[1:])
+            columns_to_whitelist_key_dict[word[0]].add(key)
+        return columns_to_whitelist_key_dict
+
+    def _build_elasticsearch_query(self, parsed_filters: List[dict]) -> List[Q]:
         type_dict = {"metric": "latest_metrics", "parameter": "params", "tag": "tags"}
+        search_query = []
         for search_filter in parsed_filters:
             key_type = search_filter.get('type')
             key_name = search_filter.get('key')
@@ -351,13 +371,13 @@ class ElasticsearchStore(AbstractStore):
                 query_val = Q(self.filter_key[comparator][0],
                               latest_metrics__value=filter_ops[comparator])
             if self.filter_key[comparator][1] == "must_not":
-                query = query_type & Q('bool', must_not=[query_val])
+                query = Q('bool', filter=[query_type], must_not=[query_val])
             else:
-                query = query_type & Q('bool', must=[query_val])
-            s = s.query('nested', path=type_dict[key_type], query=query)
-        return s
+                query = Q('bool', filter=[query_type, query_val])
+            search_query.append(Q('nested', path=type_dict[key_type], query=query))
+        return search_query
 
-    def _get_orderby_clauses(self, order_by_list: List[str], s: Search) -> Search:
+    def _get_orderby_clauses(self, order_by_list: List[str]) -> List[dict]:
         type_dict = {"metric": "latest_metrics", "parameter": "params", "tag": "tags"}
         sort_clauses = []
         if order_by_list:
@@ -375,8 +395,7 @@ class ElasticsearchStore(AbstractStore):
                     sort_clauses.append({key: {'order': sort_order}})
         sort_clauses.append({"start_time": {'order': "desc"}})
         sort_clauses.append({"_id": {'order': "asc"}})
-        s = s.sort(*sort_clauses)
-        return s
+        return sort_clauses
 
     def _search_runs(self, experiment_ids: List[str], filter_string: str,
                      run_view_type: str, max_results: int = SEARCH_MAX_RESULTS_DEFAULT,
@@ -397,12 +416,17 @@ class ElasticsearchStore(AbstractStore):
         stages = LifecycleStage.view_type_to_stages(run_view_type)
         parsed_filters = SearchUtils.parse_search_filter(filter_string)
         offset = SearchUtils.parse_start_offset_from_page_token(page_token)
-        s = Search(index="mlflow-runs").filter("match", experiment_id=experiment_ids[0]) \
-            .filter("terms", lifecycle_stage=stages)
-        s = self._build_elasticsearch_query(parsed_filters, s)
-        s = self._get_orderby_clauses(order_by, s)
+        filter_queries = [Q("match", experiment_id=experiment_ids[0]),
+                          Q("terms", lifecycle_stage=stages)]
+        filter_queries += self._build_elasticsearch_query(parsed_filters)
+        sort_clauses = self._get_orderby_clauses(order_by)
+        s = Search(index="mlflow-runs").query('bool', filter=filter_queries)
+        s = s.sort(*sort_clauses)
         response = s.source(excludes=["metrics.*"])[offset:offset + max_results].execute()
-        runs = [self._hit_to_mlflow_run(r) for r in response]
+        columns_to_whitelist_key_dict = self._build_columns_to_whitelist_key_dict(
+            columns_to_whitelist)
+        runs = [self._hit_to_mlflow_run(hit, columns_to_whitelist_key_dict)
+                for hit in response]
         next_page_token = compute_next_token(len(runs))
         return runs, next_page_token
 
