@@ -52,6 +52,7 @@ class ElasticsearchStore(AbstractStore):
         connections.create_connection(hosts=[urllib.parse.urlparse(store_uri).netloc])
         ElasticExperiment.init()
         ElasticRun.init()
+        ElasticMetric.init()
         super(ElasticsearchStore, self).__init__()
 
     def _hit_to_mlflow_experiment(self, hit: Any) -> Experiment:
@@ -91,8 +92,8 @@ class ElasticsearchStore(AbstractStore):
         return RunData(metrics=metrics, params=params, tags=tags)
 
     def _hit_to_mlflow_metric(self, hit: Any) -> Metric:
-        return Metric(key=hit.key, value=hit.value, timestamp=hit.timestamp,
-                      step=hit.step)
+        return Metric(key=hit.key, value=hit.value if not hit.is_nan else float("nan"),
+                      timestamp=hit.timestamp, step=hit.step)
 
     def _hit_to_mlflow_param(self, hit: Any) -> Param:
         return Param(key=hit.key, value=hit.value)
@@ -232,7 +233,7 @@ class ElasticsearchStore(AbstractStore):
         if not (latest_metric_exist):
             run.latest_metrics.append(new_latest_metric)
 
-    def _log_metric(self, run: Run, metric: Metric) -> None:
+    def _log_metric(self, run: ElasticRun, metric: Metric) -> None:
         _validate_metric(metric.key, metric.value, metric.timestamp, metric.step)
         is_nan = math.isnan(metric.value)
         if is_nan:
@@ -245,15 +246,16 @@ class ElasticsearchStore(AbstractStore):
                                    value=value,
                                    timestamp=metric.timestamp,
                                    step=metric.step,
-                                   is_nan=is_nan)
+                                   is_nan=is_nan,
+                                   run_id=run.meta.id)
         self._update_latest_metric_if_necessary(new_metric, run)
-        run.metrics.append(new_metric)
+        new_metric.save()
 
     def log_metric(self, run_id: str, metric: Metric) -> None:
         run = self._get_run(run_id=run_id)
         self._check_run_is_active(run)
         self._log_metric(run, metric)
-        run.save()
+        run.update(latest_metrics=run.latest_metrics)
 
     def _log_param(self, run: Run, param: Param) -> None:
         _validate_param(param.key, param.value)
@@ -265,7 +267,7 @@ class ElasticsearchStore(AbstractStore):
         run = self._get_run(run_id=run_id)
         self._check_run_is_active(run)
         self._log_param(run, param)
-        run.save()
+        run.update(params=run.params)
 
     def set_experiment_tag(self, experiment_id: str, tag: ExperimentTag) -> None:
         _validate_experiment_tag(tag.key, tag.value)
@@ -273,7 +275,7 @@ class ElasticsearchStore(AbstractStore):
         self._check_experiment_is_active(experiment.to_mlflow_entity())
         new_tag = ElasticExperimentTag(key=tag.key, value=tag.value)
         experiment.tags.append(new_tag)
-        experiment.save()
+        experiment.update(tags=experiment.tags)
 
     def _set_tag(self, run: Run, tag: RunTag) -> None:
         _validate_tag(tag.key, tag.value)
@@ -285,15 +287,12 @@ class ElasticsearchStore(AbstractStore):
         run = self._get_run(run_id=run_id)
         self._check_run_is_active(run)
         self._set_tag(run, tag)
-        run.save()
+        run.update(tags=run.tags)
 
     def get_metric_history(self, run_id: str, metric_key: str) -> List[Metric]:
-        response = Search(index="mlflow-runs").filter("ids", values=[run_id]) \
-            .filter('nested', inner_hits={"size": 100}, path="metrics",
-                    query=Q('term', metrics__key=metric_key)).source(False).execute()
-        return ([self._hit_to_mlflow_metric(m["_source"]) for m in
-                 response["hits"]["hits"][0].inner_hits.metrics.hits.hits]
-                if (len(response["hits"]["hits"]) != 0) else [])
+        response = Search(index="mlflow-metrics").filter("term", run_id=run_id) \
+            .filter("term", key=metric_key).execute()
+        return [self._hit_to_mlflow_metric(m["_source"]) for m in response["hits"]["hits"]]
 
     def _list_columns(self, experiment_id: str, stages: List[LifecycleStage],
                       column_type: str, columns: List[str], size: int = 100) -> None:
@@ -421,12 +420,10 @@ class ElasticsearchStore(AbstractStore):
         filter_queries += self._build_elasticsearch_query(parsed_filters)
         sort_clauses = self._get_orderby_clauses(order_by)
         s = Search(index="mlflow-runs").query('bool', filter=filter_queries)
-        s = s.sort(*sort_clauses)
-        response = s.source(excludes=["metrics.*"])[offset:offset + max_results].execute()
+        response = s.sort(*sort_clauses)[offset: offset + max_results].execute()
         columns_to_whitelist_key_dict = self._build_columns_to_whitelist_key_dict(
             columns_to_whitelist)
-        runs = [self._hit_to_mlflow_run(hit, columns_to_whitelist_key_dict)
-                for hit in response]
+        runs = [self._hit_to_mlflow_run(hit, columns_to_whitelist_key_dict) for hit in response]
         next_page_token = compute_next_token(len(runs))
         return runs, next_page_token
 
