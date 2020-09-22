@@ -303,7 +303,7 @@ class ElasticsearchStore(AbstractStore):
         s.aggs.bucket(column_type, 'nested', path=column_type) \
             .bucket(f'{column_type}_keys', "composite", size=size,
                     sources=[{"key": {"terms": {"field": f'{column_type}.key'}}}])
-        response = s.source(False).execute()
+        response = s.params(size=0).execute()
         new_columns = [column.key.key for column in attrgetter(
             f'aggregations.{column_type}.{column_type}_keys.buckets')(response)]
         columns += new_columns
@@ -316,7 +316,7 @@ class ElasticsearchStore(AbstractStore):
                 .bucket(f'{column_type}_keys', "composite", size=size,
                         sources=[{"key": {"terms": {"field": f'{column_type}.key'}}}],
                         after={"key": last_col})
-            response = s.source(False).execute()
+            response = s.params(size=0).execute()
             new_columns = [column.key.key for column in attrgetter(
                 f'aggregations.{column_type}.{column_type}_keys.buckets')(response)]
             columns += new_columns
