@@ -5,6 +5,7 @@ from typing import List, Tuple, Any, Dict
 from elasticsearch_dsl import Search, connections, Q
 from elasticsearch.exceptions import NotFoundError
 from six.moves import urllib
+import ast
 
 from mlflow.store.tracking.abstract_store import AbstractStore
 from mlflow.store.tracking import SEARCH_MAX_RESULTS_THRESHOLD, SEARCH_MAX_RESULTS_DEFAULT
@@ -94,7 +95,9 @@ class ElasticsearchStore(AbstractStore):
         return RunData(metrics=metrics, params=params, tags=tags)
 
     def _hit_to_mlflow_metric(self, hit: Any) -> Metric:
-        return Metric(key=hit.key, value=hit.value if not hit.is_nan else float("nan"),
+        return Metric(key=hit.key,
+                      value=hit.value if not (hasattr(hit, 'is_nan')
+                                              and hit.is_nan) else float("nan"),
                       timestamp=hit.timestamp, step=hit.step)
 
     def _hit_to_mlflow_param(self, hit: Any) -> Param:
@@ -413,31 +416,30 @@ class ElasticsearchStore(AbstractStore):
                      order_by: List[str] = None, page_token: str = None,
                      columns_to_whitelist: List[str] = None) -> Tuple[List[Run], str]:
 
-        def compute_next_token(current_size: int) -> str:
-            next_token = None
-            if max_results == current_size:
-                final_offset = offset + max_results
-                next_token = SearchUtils.create_page_token(final_offset)
-            return next_token
-        if max_results > SEARCH_MAX_RESULTS_THRESHOLD:
+        if max_results > 10000:
             raise MlflowException("Invalid value for request parameter max_results. It must be at "
                                   "most {}, but got value {}"
-                                  .format(SEARCH_MAX_RESULTS_THRESHOLD, max_results),
+                                  .format(10000, max_results),
                                   INVALID_PARAMETER_VALUE)
         stages = LifecycleStage.view_type_to_stages(run_view_type)
         parsed_filters = SearchUtils.parse_search_filter(filter_string)
-        offset = SearchUtils.parse_start_offset_from_page_token(page_token)
         filter_queries = [Q("match", experiment_id=experiment_ids[0]),
                           Q("terms", lifecycle_stage=stages)]
         filter_queries += self._build_elasticsearch_query(parsed_filters)
         sort_clauses = self._get_orderby_clauses(order_by)
         s = Search(index="mlflow-runs").query('bool', filter=filter_queries)
-        response = s.sort(*sort_clauses)[offset: offset + max_results].execute()
+        s = s.sort(*sort_clauses)
+        if page_token != "" and page_token is not None:
+            s = s.extra(search_after=ast.literal_eval(page_token))
+        response = s.params(size=max_results).execute()
         columns_to_whitelist_key_dict = self._build_columns_to_whitelist_key_dict(
             columns_to_whitelist)
         runs = [self._hit_to_mlflow_run(hit, columns_to_whitelist_key_dict) for hit in response]
-        next_page_token = compute_next_token(len(runs))
-        return runs, next_page_token
+        if len(runs) == max_results:
+            next_page_token = response.hits.hits[-1].sort
+        else:
+            next_page_token = []
+        return runs, str(next_page_token)
 
     def update_artifacts_location(self, run_id: str, new_artifacts_location: str) -> None:
         run = self._get_run(run_id=run_id)

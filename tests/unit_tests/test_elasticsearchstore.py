@@ -319,7 +319,8 @@ def test__build_elasticsearch_query(test_parsed_filter, test_query,
 @pytest.mark.usefixtures('create_store')
 def test__get_orderby_clauses(create_store):
     order_by_list = ['metrics.`metric0` ASC', 'params.`param0` DESC', 'attributes.start_time ASC']
-    actual_sort_clauses = create_store._get_orderby_clauses(order_by_list=order_by_list)
+    actual_sort_clauses = create_store._get_orderby_clauses(
+        order_by_list=order_by_list)
     sort_clauses = [{'latest_metrics.value': {'order': "asc",
                                               "nested": {"path": "latest_metrics",
                                                          "filter": {"term": {'latest_metrics.key':
