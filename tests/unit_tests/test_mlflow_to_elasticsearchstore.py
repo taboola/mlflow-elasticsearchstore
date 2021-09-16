@@ -35,7 +35,7 @@ experiment_tag = ExperimentTag(key="tag1", value="val1")
 @pytest.mark.usefixtures('create_mlflow_client')
 def test_list_experiments(list_experiments_mock, create_mlflow_client):
     create_mlflow_client.list_experiments(ViewType.ACTIVE_ONLY)
-    list_experiments_mock.assert_called_once_with(view_type=ViewType.ACTIVE_ONLY)
+    list_experiments_mock.assert_called_once_with(view_type=ViewType.ACTIVE_ONLY, max_results=None, page_token=None)
 
 
 @mock.patch("mlflow_elasticsearchstore.elasticsearch_store.ElasticsearchStore.create_experiment")

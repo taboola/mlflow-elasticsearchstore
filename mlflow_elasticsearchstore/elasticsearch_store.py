@@ -4,6 +4,7 @@ from operator import attrgetter
 from typing import List, Tuple, Any, Dict
 from elasticsearch_dsl import Search, connections, Q
 from elasticsearch.exceptions import NotFoundError
+from mlflow.store.entities import PagedList
 from six.moves import urllib
 import ast
 
@@ -107,11 +108,12 @@ class ElasticsearchStore(AbstractStore):
     def _hit_to_mlflow_tag(self, hit: Any) -> RunTag:
         return RunTag(key=hit.key, value=hit.value)
 
-    def list_experiments(self, view_type: str = ViewType.ACTIVE_ONLY) -> List[Experiment]:
+    def list_experiments(self, view_type: str = ViewType.ACTIVE_ONLY, max_results=None, page_token=None) -> List[Experiment]:
         stages = LifecycleStage.view_type_to_stages(view_type)
         response = Search(index="mlflow-experiments").filter("terms",
                                                              lifecycle_stage=stages).execute()
-        return [self._hit_to_mlflow_experiment(e) for e in response]
+        experiments = [self._hit_to_mlflow_experiment(e) for e in response]
+        return PagedList(experiments, None)
 
     def _list_experiments_name(self) -> List[str]:
         s = Search(index="mlflow-experiments")
