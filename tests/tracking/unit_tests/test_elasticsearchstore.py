@@ -6,7 +6,7 @@ from elasticsearch_dsl import Search, Q
 from mlflow.entities import (RunTag, Metric, Param, RunStatus,
                              LifecycleStage, ViewType, ExperimentTag)
 
-from mlflow_elasticsearchstore.elasticsearch_store import ElasticsearchStore
+from mlflow_elasticsearchstore.tracking.elasticsearch_store import ElasticsearchStore
 from mlflow_elasticsearchstore.models import (ElasticExperiment, ElasticRun, ElasticMetric,
                                               ElasticLatestMetric, ElasticParam,
                                               ElasticTag, ElasticExperimentTag)
@@ -191,7 +191,7 @@ def test_get_run(elastic_run_get_mock, create_store):
 
 @mock.patch('mlflow_elasticsearchstore.models.ElasticRun.get')
 @mock.patch('mlflow_elasticsearchstore.models.ElasticMetric.save')
-@mock.patch('mlflow_elasticsearchstore.elasticsearch_store.ElasticsearchStore.'
+@mock.patch('mlflow_elasticsearchstore.tracking.elasticsearch_store.ElasticsearchStore.'
             '_update_latest_metric_if_necessary')
 @pytest.mark.usefixtures('create_store')
 def test_log_metric(_update_latest_metric_if_necessary_mock,

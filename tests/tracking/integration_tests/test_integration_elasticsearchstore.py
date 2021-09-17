@@ -15,7 +15,7 @@ except ImportError:
     pass
 from mlflow.exceptions import MlflowException
 
-from mlflow_elasticsearchstore.elasticsearch_store import ElasticsearchStore
+from mlflow_elasticsearchstore.tracking.elasticsearch_store import ElasticsearchStore
 from mlflow_elasticsearchstore.models import (ElasticExperiment, ElasticRun, ElasticMetric,
                                               ElasticParam, ElasticTag,
                                               ElasticLatestMetric, ElasticExperimentTag)
