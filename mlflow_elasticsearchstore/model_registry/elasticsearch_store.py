@@ -174,6 +174,7 @@ class ElasticsearchStore(AbstractStore):
 
     def delete_registered_model_tag(self, name, key):
         _validate_model_name(name)
+
         registered_model = self.get_registered_model(name)
         tags = registered_model.to_mlflow_entity().tags
         tags_dict = {}
@@ -181,34 +182,186 @@ class ElasticsearchStore(AbstractStore):
             tags_dict[tag.key] = tag.value
 
         # Delete tag if it exists
-        tags.pop(key, None)
+        tags_dict.pop(key, None)
         
         registered_model_tags = [ElasticRegisteredModelTag(key=key, value=value) for key, value in tags_dict.items()]
         registered_model.update(refresh=True, registered_model_tags=registered_model_tags)
 
     def create_model_version(self, name, source, run_id=None, tags=None, run_link=None, description=None):
-        pass
+        # Function to derive next version
+        def next_version(elastic_registered_model):
+            if elastic_registered_model.model_versions:
+                return max([mv.version for mv in elastic_registered_model.model_versions]) + 1
+            else:
+                return 1
+
+        _validate_model_name(name)
+
+        tags_dict = {}
+        for tag in tags or []:
+            _validate_model_version_tag(tag.key, tag.value)
+            tags_dict[tag.key] = tag.value
+        
+        creation_time = now()
+        elastic_registered_model = self._get_registered_model(name)
+        version = next_version(elastic_registered_model)
+
+        model_version = ElasticModelVersion(
+            name=name,
+            version=version,
+            creation_time=creation_time,
+            last_updated_time=creation_time,
+            source=source,
+            run_id=run_id,
+            run_link=run_link,
+            description=description,
+            model_version_tags=[
+                        ElasticModelVersionTag(key=key, value=value) for key, value in tags_dict.items()
+                    ]
+        )
+
+        model_versions = elastic_registered_model.model_versions or []
+        model_versions.append(model_version)
+        elastic_registered_model.update(refresh=True, model_versions=model_versions, last_updated_time=creation_time)
+        return model_version.to_mlflow_entity()
+
+    def _get_all_model_versions(self, name):
+        return self._get_registered_model(name).model_versions
+
+    def _get_elastic_model_version(self, name, version):
+        elastic_registered_model = self._get_registered_model(name)
+        for v in elastic_registered_model.model_versions or []:
+            if v.version == version and v.current_stage != STAGE_DELETED_INTERNAL:
+                return (elastic_registered_model, v)
+        return None   
 
     def update_model_version(self, name, version, description):
-        pass
+        updated_time = now()
+        _validate_model_name(name)
+        _validate_model_version(version)
+        elastic_registered_model, elastic_model_version = self._get_elastic_model_version(name, version)
+        
+        model_versions_dict = {}
+        for model_version in elastic_registered_model.model_versions or []:
+            model_versions_dict[model_version.version] = model_version
+        
+        elastic_model_version.description = description
+        elastic_model_version.last_updated_time = updated_time
 
+        model_versions_dict[elastic_model_version.version] = elastic_model_version
+        
+        elastic_registered_model.update(refresh=True, last_updated_time=updated_time, model_versions=model_versions_dict.items())
+        return elastic_model_version.to_mlflow_entity()
+    
     def transition_model_version_stage(self, name, version, stage, archive_existing_versions):
-        pass
+        is_active_stage = get_canonical_stage(stage) in DEFAULT_STAGES_FOR_GET_LATEST_VERSIONS
+        if archive_existing_versions and not is_active_stage:
+            msg_tpl = (
+                "Model version transition cannot archive existing model versions "
+                "because '{}' is not an Active stage. Valid stages are {}"
+            )
+            raise MlflowException(msg_tpl.format(stage, DEFAULT_STAGES_FOR_GET_LATEST_VERSIONS))
+        
+        last_updated_time = now()
+        _validate_model_name(name)
+        model_versions = []
+        
+        if archive_existing_versions:
+            model_version_candidates = self._get_all_model_versions(name)
+            model_versions = filter(lambda v: v.version != version and v.current_stage == get_canonical_stage(stage), model_version_candidates)
+            for mv in model_versions:
+                mv.current_stage = STAGE_ARCHIVED
+                mv.last_updated_time = last_updated_time
 
-    def delete_model_version(self, name, version):
-        pass
+        elastic_registered_model, elastic_model_version = self._get_elastic_model_version(name, version)
+        elastic_model_version.current_stage = get_canonical_stage(stage)
+        elastic_model_version.last_updated_time = last_updated_time
+        model_versions.append(elastic_model_version)
+
+        elastic_registered_model.update(refresh=True, last_updated_time=last_updated_time, model_versions=model_versions)
+        return elastic_model_version.to_mflow_entity()
+
+    def delete_model_version(self, name, version) -> None:
+        last_updated_time = now()
+        _validate_model_name(name)
+        _validate_model_name(version)
+        elastic_registered_model = self._get_registered_model(name)
+        model_versions = elastic_registered_model.model_versions
+        for mv in model_versions:
+            if mv.version == version:
+                mv.current_stage = STAGE_DELETED_INTERNAL
+                mv.last_updated_time = last_updated_time
+                mv.description = None
+                mv.user_id = None
+                mv.source = "REDACTED-SOURCE-PATH"
+                mv.run_id = "REDACTED-RUN-ID"
+                mv.run_link = "REDACTED-RUN-LINK"
+                mv.status_message = None
+        elastic_registered_model.update(refresh=True, last_updated_time=last_updated_time, model_versions=model_versions)
 
     def get_model_version(self, name, version):
-        pass
+        return self._get_elastic_model_version(name, version).to_mlflow_entity()
 
     def get_model_version_download_uri(self, name, version):
-        pass
+        return self._get_elastic_model_version(name, version).source
 
     def search_model_versions(self, filter_string):
         pass
 
     def set_model_version_tag(self, name, version, tag):
-        pass
+        last_updated_time = now()
+        
+        _validate_model_name(name)
+        _validate_model_version(name)
+        _validate_model_version_tag(tag.key, tag.value)
+        
+        (elastic_registered_model, elastic_model_version) = self._get_elastic_model_version(name=name,version=version)     
+        tags = elastic_model_version.to_mlflow_entity().model_version_tags
+        tags_dict = {}
+        for t in tags:
+            tags_dict[t.key] = t.value
+
+        # Add/update key in the tags
+        tags_dict[tag.key] = tag.value
+        model_version_tags = [ElasticModelVersionTag(key=key, value=value) for key, value in tags_dict.items()]
+        
+        model_versions = []
+
+        for mv in elastic_registered_model.model_versions:
+            if mv.version == version:
+                mv.model_version_tags = model_version_tags
+                mv.last_updated_time = last_updated_time
+            model_versions.append(mv)
+        
+        elastic_registered_model.update(refresh=True, model_versions=model_versions, 
+                                            last_updated_time=last_updated_time)
+
 
     def delete_model_version_tag(self, name, version, key):
-        pass
+        last_updated_time = now()
+        
+        _validate_model_name(name)
+        _validate_model_version(name)
+        _validate_tag_name(key)
+        
+        (elastic_registered_model, elastic_model_version) = self._get_elastic_model_version(name=name,version=version)     
+        tags = elastic_model_version.to_mlflow_entity().model_version_tags
+        tags_dict = {}
+        for t in tags:
+            tags_dict[t.key] = t.value
+
+        # Pop the key if it exists
+        tags_dict.pop(key, None)
+        model_version_tags = [ElasticModelVersionTag(key=key, value=value) for key, value in tags_dict.items()]
+        
+        model_versions = []
+
+        for mv in elastic_registered_model.model_versions:
+            if mv.version == version:
+                mv.model_version_tags = model_version_tags
+                mv.last_updated_time = last_updated_time
+            model_versions.append(mv)
+        
+        elastic_registered_model.update(refresh=True, model_versions=model_versions, 
+                                            last_updated_time=last_updated_time)
+
