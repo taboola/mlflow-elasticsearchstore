@@ -29,7 +29,7 @@ from mlflow.store.model_registry import (
 from mlflow.store.db.base_sql_model import Base
 from mlflow.store.entities.paged_list import PagedList
 from mlflow.store.model_registry.abstract_store import AbstractStore
-from mlflow_elasticsearchstore.models import (ElasticRegisteredModel, ElasticRegisteredModelTag,
+from mlflow_elasticsearchstore.model_registry.models import (ElasticRegisteredModel, ElasticRegisteredModelTag,
                                               ElasticModelVersion, ElasticModelVersionTag)
 from mlflow.utils.search_utils import SearchUtils
 from mlflow.utils.uri import extract_db_type_from_uri
@@ -58,6 +58,7 @@ class ElasticsearchStore(AbstractStore):
     CREATE_MODEL_VERSION_RETRIES = 3
 
     def __init__(self, store_uri):
+        self.is_plugin = True
         connections.create_connection(hosts=[urllib.parse.urlparse(store_uri).netloc])
         ElasticRegisteredModel.init()
         super(ElasticsearchStore, self).__init__()
@@ -140,7 +141,7 @@ class ElasticsearchStore(AbstractStore):
         return self.search_registered_models(max_results=max_results, page_token=page_token)
 
     def search_registered_models(self, filter_string=None, max_results=None, order_by=None, page_token=None):
-        pass
+        return PagedList([], None)
 
     def get_registered_model(self, name) -> RegisteredModel:
         return self._get_registered_model(name).to_mlflow_entity()

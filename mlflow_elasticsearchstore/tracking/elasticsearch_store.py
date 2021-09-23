@@ -31,7 +31,7 @@ from mlflow.utils.validation import (
     _validate_tag,
 )
 
-from mlflow_elasticsearchstore.models import (ElasticExperiment, ElasticRun, ElasticMetric,
+from mlflow_elasticsearchstore.tracking.models import (ElasticExperiment, ElasticRun, ElasticMetric,
                                               ElasticParam, ElasticTag,
                                               ElasticLatestMetric, ElasticExperimentTag)
 
