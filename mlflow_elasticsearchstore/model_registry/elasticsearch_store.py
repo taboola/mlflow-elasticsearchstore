@@ -1,5 +1,6 @@
 import time
 import logging
+import ast
 
 from elasticsearch_dsl import Search, connections, Q
 from elasticsearch.exceptions import NotFoundError
@@ -31,6 +32,7 @@ from mlflow.store.entities.paged_list import PagedList
 from mlflow.store.model_registry.abstract_store import AbstractStore
 from mlflow_elasticsearchstore.model_registry.models import (ElasticRegisteredModel, ElasticRegisteredModelTag,
                                               ElasticModelVersion, ElasticModelVersionTag)
+
 from mlflow.utils.search_utils import SearchUtils
 from mlflow.utils.uri import extract_db_type_from_uri
 from mlflow.utils.validation import (
@@ -64,13 +66,15 @@ class ElasticsearchStore(AbstractStore):
         super(ElasticsearchStore, self).__init__()
 
     def _hit_to_mlflow_registered_model(self, hit) -> RegisteredModel:
-        # todo parse other types
+        print(hit)
         return RegisteredModel(name=hit.name,
-                    description=hit.description)
+                    description=hit.description,
+                    creation_timestamp=hit.creation_time,
+                    last_updated_timestamp=hit.last_updated_time)
 
     def _get_registered_model(self, name) -> ElasticRegisteredModel:
         try:
-            registered_model = ElasticRegisteredModel.get(name=name)
+            registered_model = ElasticRegisteredModel.get(id=name)
         except NotFoundError:
             raise MlflowException(
                 "No Experiment with name={} exists".format(name), RESOURCE_DOES_NOT_EXIST
@@ -79,7 +83,7 @@ class ElasticsearchStore(AbstractStore):
     
     def _registered_model_exists(self, name) -> bool:
         try:
-            ElasticRegisteredModel.get(name=name)
+            ElasticRegisteredModel.get(id=name)
             return True
         except NotFoundError:
             return False
@@ -112,13 +116,14 @@ class ElasticsearchStore(AbstractStore):
 
         registered_model_tags = [ElasticRegisteredModelTag(key=key, value=value) for key, value in tags_dict.items()]
         registered_model = ElasticRegisteredModel(
+            meta={'id': name},
             name=name,
             creation_time=creation_time,
             last_updated_time=creation_time,
             description=description,
             registered_model_tags=registered_model_tags
         )
-        registered_model.save()
+        registered_model.save(refresh=True)
         return registered_model.to_mlflow_entity()
     
     def update_registered_model(self, name, description) -> RegisteredModel:
@@ -130,7 +135,7 @@ class ElasticsearchStore(AbstractStore):
     def rename_registered_model(self, name, new_name) -> RegisteredModel:
         updated_time = now()
         registered_model = self._get_registered_model(name)
-        registered_model.update(refresh=True, name=new_name, last_updated_time=updated_time)
+        registered_model.update(refresh=True, _id=new_name, last_updated_time=updated_time)
         return registered_model.to_mlflow_entity()
 
     def delete_registered_model(self, name) -> None:
@@ -139,16 +144,56 @@ class ElasticsearchStore(AbstractStore):
 
     def list_registered_models(self, max_results, page_token) -> List[RegisteredModel]:
         return self.search_registered_models(max_results=max_results, page_token=page_token)
+    
+    def _parse_filter_string(self, filter_string:str):
+        splits = filter_string.split(' ', 2)
+        return splits[0], splits[1], splits[2]
+    
+    def _parse_order_by_string(self, order_by):
+        splits = order_by.split(' ', 1)
+        order_by_str = splits[0]
+        if order_by_str == 'timestamp':
+            order_by_str = 'last_updated_time'
+        if len(splits) > 1 and splits[1] == 'DESC':
+            return "-" + order_by_str
+        else:
+            return order_by_str
+    
+    def _search_registered_models(self, filter_string, max_results, order_by, page_token):
+        if max_results > 10000:
+            raise MlflowException("Invalid value for request parameter max_results. It must be at "
+                                  "most {}, but got value {}"
+                                  .format(10000, max_results),
+                                  INVALID_PARAMETER_VALUE)
+        _,_, value = self._parse_filter_string(filter_string=filter_string)
+        s = Search(index="mlflow-registered-model")
+        print(value.replace("'",""))
+        s = s.query("wildcard", name=value.replace("'","").replace("%","*"))
+        print(order_by)
+        s = s.sort(self._parse_order_by_string(order_by=order_by[0]))
+        if page_token != "" and page_token is not None:
+            s = s.extra(search_after=ast.literal_eval(page_token))
+        
+        response = s.params(size=max_results).execute()
+
+        registered_models = [self._hit_to_mlflow_registered_model(hit) for hit in response]
+        if len(registered_models) == max_results:
+            next_page_token = response.hits.hits[-1].sort
+        else:
+            next_page_token = []
+        return registered_models, str(next_page_token)
+    
 
     def search_registered_models(self, filter_string=None, max_results=None, order_by=None, page_token=None):
-        return PagedList([], None)
+        models, token = self._search_registered_models(filter_string=filter_string, max_results=max_results, order_by=order_by, page_token=page_token)
+        return PagedList(models, token)
 
     def get_registered_model(self, name) -> RegisteredModel:
         return self._get_registered_model(name).to_mlflow_entity()
 
     def get_latest_versions(self, name, stages=None) -> List[ModelVersion]:
         registered_model = self.get_registered_model(name)
-        latest_versions = registered_model.to_mlflow_entity().latest_versions
+        latest_versions = registered_model.latest_versions
         if stages is None or len(stages) == 0:
             expected_stages = set(
                 [get_canonical_stage(stage) for stage in DEFAULT_STAGES_FOR_GET_LATEST_VERSIONS]
@@ -161,9 +206,9 @@ class ElasticsearchStore(AbstractStore):
         _validate_model_name(name)
         _validate_registered_model_tag(tag.key, tag.value)
         
-        registered_model = self.get_registered_model(name)
+        registered_model = self._get_registered_model(name)
 
-        tags = registered_model.to_mlflow_entity().tags
+        tags = registered_model.registered_model_tags
         tags_dict = {}
         for t in tags:
             tags_dict[t.key] = t.value
@@ -176,8 +221,8 @@ class ElasticsearchStore(AbstractStore):
     def delete_registered_model_tag(self, name, key):
         _validate_model_name(name)
 
-        registered_model = self.get_registered_model(name)
-        tags = registered_model.to_mlflow_entity().tags
+        registered_model = self._get_registered_model(name)
+        tags = registered_model.registered_model_tags
         tags_dict = {}
         for tag in tags:
             tags_dict[tag.key] = tag.value
@@ -208,6 +253,7 @@ class ElasticsearchStore(AbstractStore):
         version = next_version(elastic_registered_model)
 
         model_version = ElasticModelVersion(
+            _id=name+version,
             name=name,
             version=version,
             creation_time=creation_time,
@@ -230,7 +276,7 @@ class ElasticsearchStore(AbstractStore):
         return self._get_registered_model(name).model_versions
 
     def _get_elastic_model_version(self, name, version):
-        elastic_registered_model = self._get_registered_model(name)
+        elastic_registered_model = self._get_registered_model(name=name)
         for v in elastic_registered_model.model_versions or []:
             if v.version == version and v.current_stage != STAGE_DELETED_INTERNAL:
                 return (elastic_registered_model, v)
@@ -307,7 +353,7 @@ class ElasticsearchStore(AbstractStore):
         return self._get_elastic_model_version(name, version).source
 
     def search_model_versions(self, filter_string):
-        pass
+        return []
 
     def set_model_version_tag(self, name, version, tag):
         last_updated_time = now()
