@@ -26,7 +26,7 @@ class ElasticModelVersionTag(InnerDoc):
     def to_mlflow_entity(self):
         return ModelVersionTag(self.key, self.value)
 
-class ElasticModelVersion(InnerDoc):
+class ElasticModelVersion(Document):
     name = Keyword()
     version = Long()
     creation_time = Long()
@@ -41,7 +41,19 @@ class ElasticModelVersion(InnerDoc):
     status_message = Text()
     model_version_tags = Nested(ElasticModelVersionTag)
 
+    class Index:
+        name = 'mlflow-model-version'
+        settings = {
+            "number_of_shards": 1,
+            "number_of_replicas":1
+        }
+    
+
     def to_mlflow_entity(self):
+        
+        if self.model_version_tags is None:
+            self.model_version_tags = []
+        
         return ModelVersion(
             self.name,
             self.version,
@@ -63,7 +75,6 @@ class ElasticRegisteredModel(Document):
     creation_time = Long()
     last_updated_time = Long()
     description = Text()
-    model_versions = Nested(ElasticModelVersion)
     registered_model_tags = Nested(ElasticRegisteredModelTag)
 
     class Index:
@@ -73,9 +84,12 @@ class ElasticRegisteredModel(Document):
             "number_of_replicas": 2
         }
 
-    def to_mlflow_entity(self):
+    def to_mlflow_entity(self, model_versions=[]):
+        if self.registered_model_tags is None:
+            self.registered_model_tags = []
+        
         latest_versions = {}
-        for mv in self.model_versions:
+        for mv in model_versions:
             stage = mv.current_stage
             if stage != STAGE_DELETED_INTERNAL and (
                     stage not in latest_versions or latest_versions[stage].version < mv.version
