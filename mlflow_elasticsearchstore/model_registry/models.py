@@ -26,7 +26,7 @@ class ElasticModelVersionTag(InnerDoc):
     def to_mlflow_entity(self):
         return ModelVersionTag(self.key, self.value)
 
-class ElasticModelVersion(Document):
+class ElasticModelVersion(InnerDoc):
     name = Keyword()
     version = Long()
     creation_time = Long()
@@ -41,19 +41,7 @@ class ElasticModelVersion(Document):
     status_message = Text()
     model_version_tags = Nested(ElasticModelVersionTag)
 
-    class Index:
-        name = 'mlflow-model-version'
-        settings = {
-            "number_of_shards": 1,
-            "number_of_replicas":1
-        }
-    
-
     def to_mlflow_entity(self):
-        
-        if self.model_version_tags is None:
-            self.model_version_tags = []
-        
         return ModelVersion(
             self.name,
             self.version,
@@ -66,7 +54,7 @@ class ElasticModelVersion(Document):
             self.run_id,
             self.status,
             self.status_message,
-            [tag.to_mlflow_entity() for tag in self.model_version_tags],
+            [tag.to_mlflow_entity() for tag in self.model_version_tags or []],
             self.run_link,
         )
 
@@ -75,6 +63,7 @@ class ElasticRegisteredModel(Document):
     creation_time = Long()
     last_updated_time = Long()
     description = Text()
+    model_versions = Nested(ElasticModelVersion)
     registered_model_tags = Nested(ElasticRegisteredModelTag)
 
     class Index:
@@ -84,12 +73,9 @@ class ElasticRegisteredModel(Document):
             "number_of_replicas": 2
         }
 
-    def to_mlflow_entity(self, model_versions=[]):
-        if self.registered_model_tags is None:
-            self.registered_model_tags = []
-        
+    def to_mlflow_entity(self):
         latest_versions = {}
-        for mv in model_versions:
+        for mv in self.model_versions:
             stage = mv.current_stage
             if stage != STAGE_DELETED_INTERNAL and (
                     stage not in latest_versions or latest_versions[stage].version < mv.version
@@ -101,5 +87,5 @@ class ElasticRegisteredModel(Document):
             self.last_updated_time,
             self.description,
             [mvd.to_mlflow_entity() for mvd in latest_versions.values()],
-            [tag.to_mlflow_entity() for tag in self.registered_model_tags],
+            [tag.to_mlflow_entity() for tag in self.registered_model_tags or []],
         )
